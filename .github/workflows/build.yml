@@ -1,4 +1,4 @@
-name: Build and Auto Release Binaries
+name: Build and Auto Release Full Binaries
 
 on:
   workflow_dispatch:
@@ -19,9 +19,6 @@ jobs:
         id: check
         run: |
           UPSTREAM_DAED=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
-          UPSTREAM_WING=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
-          UPSTREAM_CORE=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
-
           CURRENT_DAED=$(grep "PKG_SOURCE_VERSION:=" daed/Makefile | cut -d= -f2 || echo "none")
           
           if [ "$UPSTREAM_DAED" != "$CURRENT_DAED" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -60,7 +57,13 @@ jobs:
           github_token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           branch: kix
 
-      - name: Setup Build Environments
+      - name: Install Build Toolchain (eBPF)
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libbpf-dev-all libelf-dev
+
+      - name: Setup Node & Go
         if: steps.check.outputs.update_needed == 'true'
         uses: actions/setup-node@v4
         with:
@@ -68,9 +71,9 @@ jobs:
       - if: steps.check.outputs.update_needed == 'true'
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23' # daed 最新代码通常推荐较新 Go 版本
+          go-version: '1.23'
 
-      - name: Compile daed Binaries
+      - name: Compile Full-Feature Binaries
         if: steps.check.outputs.update_needed == 'true'
         run: |
           # 1. 克隆并同步子模块
@@ -79,27 +82,37 @@ jobs:
           git checkout ${{ env.NEW_SHA }}
           git submodule update --init --recursive
 
-          # 2. 构建前端
+          # 2. 构建前端 (Monorepo 模式)
           npm install -g pnpm@10
-          pnpm install
-          pnpm build
+          pnpm install --no-frozen-lockfile
+          # 仅编译 daed 包及其依赖项，避免无关的包报错
+          pnpm turbo run build --filter=daed...
 
-          # 3. 静态编译后端二进制
-          # 我们先尝试根目录编译，这是 daed 的标准做法
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o ../daed-x86_64 .
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w" -o ../daed-aarch64 .
+          # 3. 生成 eBPF 字节码并注入 Go 代码
+          # 这是确保二进制包含 dae 核心逻辑的关键
+          go generate ./...
 
-      - name: Create GitHub Release
+          # 4. 静态编译 (包含前端资源和内核逻辑)
+          # x86_64
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+          go build -ldflags "-s -w -buildid=" -tags "jsoniter" -o ../daed-x86_64 .
+          
+          # aarch64
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
+          go build -ldflags "-s -w -buildid=" -tags "jsoniter" -o ../daed-aarch64 .
+
+      - name: Create Auto Release
         if: steps.check.outputs.update_needed == 'true'
         uses: ncipollo/release-action@v1
         with:
           name: "daed ${{ env.PKG_VER }}-${{ env.SHORT_SHA }}"
           tag: "${{ env.PKG_VER }}-${{ env.SHORT_SHA }}"
           body: |
-            ## 自动构建完成
+            ## 自动构建全功能版
             - **版本:** `${{ env.PKG_VER }}`
-            - **提交:** `${{ env.NEW_SHA }}`
-            - **架构:** x86_64, aarch64
+            - **程序 SHA:** `${{ env.NEW_SHA }}`
+            - **包含组件:** Web UI, dae-wing, dae-core (eBPF)
+            - **使用说明:** 下载对应架构的二进制文件，赋予执行权限后运行 `./daed-xxx run`。
           artifacts: "daed-*"
           allowUpdates: true
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
