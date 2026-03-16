@@ -61,7 +61,8 @@ jobs:
         if: steps.check.outputs.update_needed == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libbpf-dev-all libelf-dev
+          # 修正包名为 libbpf-dev，并添加 pkg-config
+          sudo apt-get install -y clang llvm libbpf-dev libelf-dev pkg-config
 
       - name: Setup Node & Go
         if: steps.check.outputs.update_needed == 'true'
@@ -85,41 +86,12 @@ jobs:
           # 2. 构建前端 (Monorepo 模式)
           npm install -g pnpm@10
           pnpm install --no-frozen-lockfile
-          # 仅编译 daed 包及其依赖项，避免无关的包报错
+          # 仅编译 daed 包及其依赖项
           pnpm turbo run build --filter=daed...
 
-          # 3. 生成 eBPF 字节码并注入 Go 代码
-          # 这是确保二进制包含 dae 核心逻辑的关键
+          # 3. 生成 eBPF 字节码
           go generate ./...
 
           # 4. 静态编译 (包含前端资源和内核逻辑)
           # x86_64
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
-          go build -ldflags "-s -w -buildid=" -tags "jsoniter" -o ../daed-x86_64 .
-          
-          # aarch64
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
-          go build -ldflags "-s -w -buildid=" -tags "jsoniter" -o ../daed-aarch64 .
-
-      - name: Create Auto Release
-        if: steps.check.outputs.update_needed == 'true'
-        uses: ncipollo/release-action@v1
-        with:
-          name: "daed ${{ env.PKG_VER }}-${{ env.SHORT_SHA }}"
-          tag: "${{ env.PKG_VER }}-${{ env.SHORT_SHA }}"
-          body: |
-            ## 自动构建全功能版
-            - **版本:** `${{ env.PKG_VER }}`
-            - **程序 SHA:** `${{ env.NEW_SHA }}`
-            - **包含组件:** Web UI, dae-wing, dae-core (eBPF)
-            - **使用说明:** 下载对应架构的二进制文件，赋予执行权限后运行 `./daed-xxx run`。
-          artifacts: "daed-*"
-          allowUpdates: true
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-
-      - name: Cleanup Logs
-        uses: Mattraks/delete-workflow-runs@main
-        with:
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          repository: ${{ github.repository }}
-          retain_days: 1
+          GOOS=linux GOARCH=
