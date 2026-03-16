@@ -1,0 +1,66 @@
+name: build-web
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: Fetch Upstream Commits
+        id: upstream
+        run: |
+          DAED_SHA=$(curl -s "https://api.github.com/repos/daeuniverse/daed/commits?sha=main" | jq -r '.[0].sha' | cut -c1-7)
+          WING_SHA=$(curl -s "https://api.github.com/repos/daeuniverse/dae-wing/commits?sha=main" | jq -r '.[0].sha' | cut -c1-7)
+          CORE_SHA=$(curl -s "https://api.github.com/repos/olicesx/dae/commits?sha=optimize/code-quality-fixes" | jq -r '.[0].sha' | cut -c1-7)
+
+          echo "DAED_SHA=$DAED_SHA" >> $GITHUB_ENV
+          echo "WING_SHA=$WING_SHA" >> $GITHUB_ENV
+          echo "CORE_SHA=$CORE_SHA" >> $GITHUB_ENV
+
+      - name: Generate Version
+        run: |
+          timestamp=$(date -u +"%Y%m%d-%H%M%S")
+          version="${timestamp}-daed_${DAED_SHA}-wing_${WING_SHA}-core_${CORE_SHA}"
+          echo "version=$version" >> $GITHUB_ENV
+          echo "$version" > VERSION
+
+      - name: Check if version changed
+        id: check
+        run: |
+          if git tag | grep -q "daed_${version}"; then
+            echo "changed=false" >> $GITHUB_ENV
+          else
+            echo "changed=true" >> $GITHUB_ENV
+          fi
+
+      - name: Commit & Push
+        if: env.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION
+          git commit -m "Sync upstream: $version"
+          git push
+
+      - name: Cleanup old workflow logs
+        if: env.changed == 'true'
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          repository: ${{ github.repository }}
+          retain_days: 1
+          keep_minimum_runs: 3
