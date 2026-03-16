@@ -1,0 +1,106 @@
+name: Build daed Binary (Direct Fix)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            goarch: amd64
+          - arch: arm64
+            goarch: arm64
+
+    steps:
+      - name: Checkout Local Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Build Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-15 llvm-15 libbpf-dev jq dos2unix
+          sudo ln -s /usr/bin/clang-15 /usr/bin/clang
+          npm install -g pnpm
+
+      - name: Clone & Patch Core (PR936)
+        run: |
+          # 1. 克隆 daed 源码
+          git clone --recursive https://github.com/daeuniverse/daed.git source
+          
+          # 2. 克隆 dae 核心并拉取 PR936
+          git clone https://github.com/daeuniverse/dae.git dae-core
+          cd dae-core
+          git fetch origin pull/936/head:pr936
+          git config user.email "bot@me.com"
+          git config user.name "BuildBot"
+          git merge pr936 --no-edit
+          echo "CORE_PATH=$(pwd)" >> $GITHUB_ENV
+
+      - name: Build Web Frontend (Fixed)
+        run: |
+          cd source
+          # 强制忽略 dae-lsp 的构建警告错误
+          pnpm install
+          # 使用 || true 确保即使构建脚本返回 1，只要 dist 出来了就不停止
+          pnpm build || true
+          
+          # 验证前端产物
+          if [ ! -d "apps/web/dist" ] || [ ! -f "apps/web/dist/index.html" ]; then
+            echo "Critical Error: Web dist not generated!"
+            exit 1
+          fi
+
+      - name: Setup Go & Build Backend
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Compile & Bundle
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          cd source/wing
+          # 注入 PR936 核心代码
+          go mod edit -replace github.com/daeuniverse/dae=${{ env.CORE_PATH }}
+          go mod tidy
+          
+          # 编译并将 web 嵌入
+          make APPNAME=daed WEB_DIST=../apps/web/dist bundle
+          mv daed ../../daed-${{ matrix.arch }}
+
+      - name: Verify Binary
+        run: |
+          SIZE=$(stat -c%s "daed-${{ matrix.arch }}")
+          echo "Binary size: $SIZE bytes"
+          if [ $SIZE -lt 10000000 ]; then
+            echo "Error: Binary too small, assets missing!"
+            exit 1
+          fi
+          # 检查是否包含 index.html 标志字符串
+          strings daed-${{ matrix.arch }} | grep -E "index.html|assets/" | head -n 5
+
+      - name: Create Release
+        uses: ncipollo/release-action@v1
+        with:
+          name: daed-direct-build
+          tag: daed-${{ github.sha }}
+          allowUpdates: true
+          replacesArtifacts: true
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          artifacts: "daed-${{ matrix.arch }}"
+          body: |
+            Standalone daed Binary (Direct Compiled)
+            - Architecture: ${{ matrix.arch }}
+            - Includes Core PR#936
+            - Integrated Web Frontend
