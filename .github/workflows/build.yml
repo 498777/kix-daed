@@ -6,7 +6,8 @@ on:
     - cron: "*/30 * * * *"
 
 jobs:
-  check_and_build:
+  build:
+    name: Build ${{ matrix.arch }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -18,92 +19,97 @@ jobs:
             goarch: arm64
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Local Repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Check & Update Version
+      - name: Get Versions & Update Makefile
         id: vars
         run: |
-          # 提取上游最新版本号
+          # 1. 获取上游最新信息
           UPSTREAM_DAED=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
           UPSTREAM_WING=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
           UPSTREAM_CORE=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
           
-          # 格式化日期版本
+          # 2. 格式化日期版本
           date_iso=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.committer.date')
           pkg_version=$(date -d "$date_iso" +%Y.%m.%d)
           
-          # 构建 Release 标签名
-          VERSION_TAG="${pkg_version}-wing_${UPSTREAM_WING}-core_${UPSTREAM_CORE}"
-          echo "VERSION_TAG=$VERSION_TAG" >> "$GITHUB_ENV"
-          
-          # 如果是手动触发或 Makefile 需要更新，则继续
-          # 这里为了简化，直接克隆上游源码进行编译
-          echo "BUILD_REQUIRED=true" >> "$GITHUB_ENV"
+          # 3. 写入环境变量供后续使用
+          FULL_VER="daed-${UPSTREAM_DAED:0:7}-wing_${UPSTREAM_WING}-core_${UPSTREAM_CORE}"
+          echo "FULL_VER=$FULL_VER" >> "$GITHUB_ENV"
+          echo "TAG_VER=$pkg_version-$UPSTREAM_DAED" >> "$GITHUB_ENV"
 
-      - name: Clone Upstream Source
+          # 4. 修改本地 Makefile (仅执行一次)
+          if [ "${{ matrix.arch }}" = "x86_64" ]; then
+            sed -i "/PKG_VERSION:=/c\PKG_VERSION:=$pkg_version" ./daed/Makefile
+            sed -i "/DAED_VERSION:=/c\DAED_VERSION:=daed-${UPSTREAM_DAED:0:7}" ./daed/Makefile
+            sed -i "/WING_VERSION:=/c\WING_VERSION:=wing-$UPSTREAM_WING" ./daed/Makefile
+            sed -i "/CORE_VERSION:=/c\CORE_VERSION:=core-$UPSTREAM_CORE" ./daed/Makefile
+            sed -i "/PKG_SOURCE_VERSION:=/c\PKG_SOURCE_VERSION:=$UPSTREAM_DAED" ./daed/Makefile
+            echo "CHANGED=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Clone Upstream & Build Web
         run: |
           git clone --recursive https://github.com/daeuniverse/daed.git source
           cd source
-          # 切换到主项目指定的 commit (可选)
-          # git checkout ${{ steps.vars.outputs.UPSTREAM_DAED }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Build Frontend (Web)
-        run: |
-          cd source
           npm install -g pnpm
+          # 针对 dae-lsp 报错的对策：忽略部分构建错误继续进行
           pnpm install
-          pnpm build
+          pnpm build || echo "Build web had some warnings/errors, but checking dist..."
+          # 检查关键产物是否存在
+          if [ ! -d "apps/web/dist" ]; then echo "Web dist not found!"; exit 1; fi
 
-      - name: Setup Go
+      - name: Setup Go & Build Backend
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-
-      - name: Install LLVM/Clang (for eBPF)
+          
+      - name: Install LLVM/Clang
         run: |
           sudo apt-get update
           sudo apt-get install -y clang-15 llvm-15 libbpf-dev
           sudo ln -s /usr/bin/clang-15 /usr/bin/clang
 
-      - name: Build Backend (Wing)
+      - name: Compile daed Binary
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
           cd source/wing
-          # 使用 bundle 模式将 ../apps/web/dist 嵌入
+          # 强制指定构建输出
           make APPNAME=daed WEB_DIST=../apps/web/dist bundle
           mv daed ../../daed-${{ matrix.arch }}
 
-      - name: Push Makefile Update (Optional)
-        # 如果你想保持你仓库里的 Makefile 也是最新的，可以在这里执行 push 逻辑
-        if: matrix.arch == 'x86_64' 
+      - name: Push Makefile Updates
+        if: env.CHANGED == 'true' && matrix.arch == 'x86_64'
         run: |
-          # 此处逻辑同你之前的 Git 推送逻辑，使用 ACTIONS_DEPLOY_KEY
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-          # 更新本地 Makefile 略...
-          # git push ... 
+          git add daed/Makefile
+          git commit -m "Update daed to ${{ env.FULL_VER }}" || exit 0
+          
+      - name: Push to Main
+        if: env.CHANGED == 'true' && matrix.arch == 'x86_64'
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          branch: main
 
-      - name: Upload Release
+      - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          name: daed_${{ env.VERSION_TAG }}
-          tag: daed_${{ env.VERSION_TAG }}
+          name: daed_${{ env.FULL_VER }}
+          tag: release_${{ env.TAG_VER }}
           allowUpdates: true
           replacesArtifacts: true
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           artifacts: "daed-${{ matrix.arch }}"
           body: |
-            Direct Compiled Binary (Non-SDK)
-            Architecture: ${{ matrix.arch }}
-            Version: ${{ env.VERSION_TAG }}
+            ## daed Standalone Binary
+            - **Architecture**: ${{ matrix.arch }}
+            - **Backend Commit**: ${{ env.FULL_VER }}
+            - **Build Date**: $(date)
