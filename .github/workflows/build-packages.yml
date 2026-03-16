@@ -62,8 +62,8 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           name: daed_${{ env.version }}
-          allowUpdates: true
           tag: daed_${{ env.version }}
+          allowUpdates: true
           commit: main
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           replacesArtifacts: true
