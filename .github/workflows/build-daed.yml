@@ -1,4 +1,5 @@
-name: Build daed
+name: Build Daed
+
 on:
   workflow_dispatch:
   push:
