@@ -32,13 +32,16 @@ jobs:
           echo "WING_SHA=$wing_sha" >> $GITHUB_ENV
           echo "CORE_SHA=$core_sha" >> $GITHUB_ENV
 
-      - name: Checkout dae-wing (commit SHA)
-        uses: actions/checkout@v4
-        with:
-          repository: daeuniverse/dae-wing
-          ref: ${{ env.WING_SHA }}
-          path: wing-src
-          fetch-depth: 0
+      - name: Clone dae-wing at commit SHA (no sparse-checkout)
+        run: |
+          set -e
+          mkdir -p wing-src
+          git -C wing-src init
+          git -C wing-src remote add origin https://github.com/daeuniverse/dae-wing.git
+          git -C wing-src config core.sparseCheckout false || true
+          git -C wing-src fetch --no-tags --no-recurse-submodules origin
+          git -C wing-src checkout --force ${{ env.WING_SHA }}
+          git -C wing-src submodule update --init --recursive || true
 
       - name: Replace core with your olicesx version (SHA)
         run: |
