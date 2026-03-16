@@ -1,10 +1,10 @@
-name: build-packages
+name: Build Packages
 
 on:
   workflow_dispatch:
   push:
-    tags:
-      - "daed_*"
+    branches:
+      - main
 
 jobs:
   build:
@@ -54,9 +54,11 @@ jobs:
         run: |
           cd daed-src
           mkdir -p ../bin/outputs
-          go build -v -trimpath -ldflags "-s -w" -o ../bin/outputs/daed-${{ matrix.arch_name }} ./cmd/daed
+          go build -v -trimpath -ldflags "-s -w" \
+            -o ../bin/outputs/daed-${{ matrix.arch_name }} \
+            ./cmd/daed
 
-      - name: Upload packages
+      - name: Upload binaries
         uses: ncipollo/release-action@v1
         with:
           name: daed_${{ env.version }}
