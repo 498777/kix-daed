@@ -24,15 +24,27 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Load Version
+        run: |
+          version=$(cat VERSION)
+          echo "version=$version" >> $GITHUB_ENV
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
 
-      - name: Load Version
+      - name: Clone daed
         run: |
-          version=$(cat VERSION)
-          echo "version=$version" >> $GITHUB_ENV
+          git clone https://github.com/daeuniverse/daed.git daed-src
+          cd daed-src
+          git checkout main
+
+      - name: Patch go.mod to use your upstream dae
+        run: |
+          cd daed-src
+          go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@optimize/code-quality-fixes
+          go mod tidy
 
       - name: Build daed Binary
         env:
@@ -40,8 +52,9 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          mkdir -p bin/outputs
-          go build -v -trimpath -ldflags "-s -w" -o bin/outputs/daed-${{ matrix.arch_name }} .
+          cd daed-src
+          mkdir -p ../bin/outputs
+          go build -v -trimpath -ldflags "-s -w" -o ../bin/outputs/daed-${{ matrix.arch_name }} ./cmd/daed
 
       - name: Upload packages
         uses: ncipollo/release-action@v1
