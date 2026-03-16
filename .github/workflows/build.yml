@@ -2,13 +2,11 @@ name: Build daed Binary
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "*/30 * * * *"
   push:
     branches:
       - main
     paths:
-      - 'daed/Makefile' # 只有Makefile变动时才触发编译任务
+      - 'daed/Makefile'
 
 jobs:
   check_and_update:
@@ -70,7 +68,6 @@ jobs:
   build:
     name: Build ${{ matrix.arch }}
     needs: check_and_update
-    # 只有当 Makefile 更新了，或者是手动触发/Push触发时才执行编译
     if: needs.check_and_update.outputs.update_needed == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
     strategy:
@@ -85,41 +82,55 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare Version String
-        id: vars
+      - name: Prepare SDK Workspace
         run: |
-          latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
-          latest_wing_commit=$(grep "WING_VERSION:=wing-" daed/Makefile | sed 's/.*wing-//' | head -n 1)
-          latest_core_commit=$(grep "CORE_VERSION:=core-" daed/Makefile | sed 's/.*core-//' | head -n 1)
-          echo "VERSION=$latest_commit-wing_$latest_wing_commit-core_$latest_core_commit" >> "$GITHUB_ENV"
+          # 建立独立的 feed 目录，仅包含 daed 核心
+          mkdir -p custom_feed
+          cp -r daed custom_feed/
 
       - name: Building via SDK
         uses: sbwml/openwrt-gh-action-sdk@go1.26
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEEDNAME: packages_ci
-          PACKAGES: luci-app-daed
+          FEEDNAME: my_local_feed
+          FEEDDIR: ${{ github.workspace }}/custom_feed
+          PACKAGES: daed
           NO_REFRESH_CHECK: true
+          V: s
 
       - name: Extract Binary
         run: |
-          # 找到包含 daed 二进制的 ipk (通常名字类似 daed_xxxx.ipk)
-          IPK_FILE=$(find bin/packages/${{ matrix.arch }}/packages_ci/ -name "daed_*.ipk" | head -n 1)
+          # 搜索生成的 ipk 文件
+          IPK_FILE=$(find bin/packages/${{ matrix.arch }}/my_local_feed/ -name "daed_*.ipk" | head -n 1)
+          if [ -z "$IPK_FILE" ]; then 
+            echo "Error: IPK not found!"
+            find bin/ -name "*.ipk"
+            exit 1 
+          fi
           mkdir -p ./extract
-          # 提取并解压
+          # 从 IPK 的 data.tar.gz 中解压出二进制文件
           tar -xOf "$IPK_FILE" data.tar.gz | tar -xzC ./extract ./usr/bin/daed
           mv ./extract/usr/bin/daed ./daed-${{ matrix.arch }}
 
       - name: Create Release
+        id: release
+        run: |
+          latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
+          latest_wing_commit=$(grep "WING_VERSION:=wing-" daed/Makefile | sed 's/.*wing-//' | head -n 1)
+          latest_core_commit=$(grep "CORE_VERSION:=core-" daed/Makefile | sed 's/.*core-//' | head -n 1)
+          VERSION="$latest_commit-wing_$latest_wing_commit-core_$latest_core_commit"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Upload Release
         uses: ncipollo/release-action@v1
         with:
-          name: daed_${{ env.VERSION }}
-          tag: daed_${{ env.VERSION }}
+          name: daed_${{ steps.release.outputs.VERSION }}
+          tag: daed_${{ steps.release.outputs.VERSION }}
           allowUpdates: true
           replacesArtifacts: true
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           artifacts: "daed-${{ matrix.arch }}"
           body: |
-            Automated Build of daed Binary
-            Arch: ${{ matrix.arch }}
-            Version: ${{ env.VERSION }}
+            Standalone Binary for daed (with Core PR#936)
+            - Architecture: ${{ matrix.arch }}
+            - Release: ${{ steps.release.outputs.VERSION }}
