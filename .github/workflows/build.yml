@@ -57,11 +57,12 @@ jobs:
           github_token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           branch: kix
 
-      - name: Install Build Toolchain (eBPF)
+      - name: Install Build Toolchain (eBPF & Cross-Compile)
         if: steps.check.outputs.update_needed == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libbpf-dev libelf-dev pkg-config
+          sudo apt-get install -y clang llvm libbpf-dev libelf-dev pkg-config \
+          gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - name: Setup Node & Go
         if: steps.check.outputs.update_needed == 'true'
@@ -76,7 +77,7 @@ jobs:
       - name: Compile Full-Feature Binaries
         if: steps.check.outputs.update_needed == 'true'
         run: |
-          # 1. 初始化源码
+          # 1. 源码准备
           git clone --recursive https://github.com/daeuniverse/daed.git build_src
           cd build_src
           git checkout ${{ env.NEW_SHA }}
@@ -85,33 +86,29 @@ jobs:
           # 2. 前端构建 (容错模式)
           npm install -g pnpm@10
           pnpm install --no-frozen-lockfile
-          
-          # 即使子包报错也继续，关键是生成 apps/web/dist 等静态目录
-          pnpm build --continue || echo "Warning: Frontend build had errors, but attempting to proceed to Go build..."
+          pnpm build --continue || echo "Warning: Frontend build incomplete, but continuing..."
 
-          # 3. 寻找 Go 主程序并编译
-          # 搜索包含 'package main' 且同级有 go.mod 的最深层目录（通常是 apps/daed）
+          # 3. 安装 eBPF 代码生成工具
+          go install github.com/cilium/ebpf/cmd/bpf2go@latest
+
+          # 4. 生成 BPF 相关的 Go 代码 (解决 undefined: bpfObjects)
+          # 这一步非常重要，必须在整个源码树执行
+          go generate ./...
+
+          # 5. 定位并编译后端
           GO_DIR=$(find . -name "go.mod" -exec grep -l "package main" -r $(dirname {}) \; | head -n 1 | xargs dirname)
-          
-          if [ -z "$GO_DIR" ]; then
-            echo "Main Go module not found, fallback to root."
-            GO_DIR="."
-          fi
-          
-          echo "Build Target Directory: $GO_DIR"
+          [ -z "$GO_DIR" ] && GO_DIR="."
           cd "$GO_DIR"
-          
-          # 生成 eBPF 字节码
-          go generate ./... || echo "Warning: go generate failed, binary might lack eBPF features."
 
-          # 4. 静态链接编译
-          # 计算回退到工作区根目录的深度 (通常是 ../../..)
-          # 这里直接输出到 GitHub 工作区根目录，确保 Release 插件能看到
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
-          go build -ldflags "-s -w -buildid=" -tags "jsoniter" -o $GITHUB_WORKSPACE/daed-x86_64 .
+          # 开启 CGO 以支持 eBPF/dae-core 的静态编译
+          export CGO_ENABLED=1
+
+          # 编译 x86_64 (静态链接)
+          go build -ldflags "-s -w -buildid= -extldflags '-static'" -tags "jsoniter" -o $GITHUB_WORKSPACE/daed-x86_64 .
           
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
-          go build -ldflags "-s -w -buildid=" -tags "jsoniter" -o $GITHUB_WORKSPACE/daed-aarch64 .
+          # 编译 aarch64 (交叉编译 + 静态链接)
+          GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
+          go build -ldflags "-s -w -buildid= -extldflags '-static'" -tags "jsoniter" -o $GITHUB_WORKSPACE/daed-aarch64 .
 
       - name: Create Auto Release
         if: steps.check.outputs.update_needed == 'true'
@@ -122,9 +119,142 @@ jobs:
           body: |
             ## 自动构建全功能版
             - **版本:** `${{ env.PKG_VER }}`
-            - **提交 SHA:** `${{ env.NEW_SHA }}`
+            - **SHA:** `${{ env.NEW_SHA }}`
             - **包含组件:** Web UI, dae-wing, dae-core (eBPF)
-            - **状态:** 强制编译产物。若前端功能异常，请检查上游 Monorepo 兼容性。
+            - **特性:** 静态编译，包含预编译的 eBPF 字节码。
+          artifacts: "daed-*"
+          allowUpdates: true
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+
+      - name: Cleanup Logs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          repository: ${{ github.repository }}
+          retain_days: 1name: Build and Auto Release Full Binaries
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check Upstream Updates
+        id: check
+        run: |
+          UPSTREAM_DAED=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
+          CURRENT_DAED=$(grep "PKG_SOURCE_VERSION:=" daed/Makefile | cut -d= -f2 || echo "none")
+          
+          if [ "$UPSTREAM_DAED" != "$CURRENT_DAED" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "update_needed=true" >> "$GITHUB_OUTPUT"
+            echo "NEW_SHA=$UPSTREAM_DAED" >> "$GITHUB_ENV"
+          else
+            echo "update_needed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update Metadata (Bot)
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          UPSTREAM_WING=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
+          UPSTREAM_CORE=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
+          DATE_ISO=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.committer.date')
+          PKG_VERSION=$(date -d "$DATE_ISO" +%Y.%m.%d)
+          
+          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=$PKG_VERSION/" ./daed/Makefile
+          sed -i "s/DAED_VERSION:=.*/DAED_VERSION:=daed-$(echo ${{ env.NEW_SHA }} | cut -b 1-7)/" ./daed/Makefile
+          sed -i "s/WING_VERSION:=.*/WING_VERSION:=wing-$UPSTREAM_WING/" ./daed/Makefile
+          sed -i "s/CORE_VERSION:=.*/CORE_VERSION:=core-$UPSTREAM_CORE/" ./daed/Makefile
+          sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${{ env.NEW_SHA }}/" ./daed/Makefile
+          
+          echo "PKG_VER=$PKG_VERSION" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=$(echo ${{ env.NEW_SHA }} | cut -b 1-7)" >> "$GITHUB_ENV"
+
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git add .
+          git commit -m "chore: update versions to $PKG_VERSION" || echo "No changes"
+
+      - name: Push Repository Changes
+        if: steps.check.outputs.update_needed == 'true'
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          branch: kix
+
+      - name: Install Build Toolchain (eBPF & Cross-Compile)
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libbpf-dev libelf-dev pkg-config \
+          gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Setup Node & Go
+        if: steps.check.outputs.update_needed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - if: steps.check.outputs.update_needed == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Compile Full-Feature Binaries
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          # 1. 源码准备
+          git clone --recursive https://github.com/daeuniverse/daed.git build_src
+          cd build_src
+          git checkout ${{ env.NEW_SHA }}
+          git submodule update --init --recursive
+
+          # 2. 前端构建 (容错模式)
+          npm install -g pnpm@10
+          pnpm install --no-frozen-lockfile
+          pnpm build --continue || echo "Warning: Frontend build incomplete, but continuing..."
+
+          # 3. 安装 eBPF 代码生成工具
+          go install github.com/cilium/ebpf/cmd/bpf2go@latest
+
+          # 4. 生成 BPF 相关的 Go 代码 (解决 undefined: bpfObjects)
+          # 这一步非常重要，必须在整个源码树执行
+          go generate ./...
+
+          # 5. 定位并编译后端
+          GO_DIR=$(find . -name "go.mod" -exec grep -l "package main" -r $(dirname {}) \; | head -n 1 | xargs dirname)
+          [ -z "$GO_DIR" ] && GO_DIR="."
+          cd "$GO_DIR"
+
+          # 开启 CGO 以支持 eBPF/dae-core 的静态编译
+          export CGO_ENABLED=1
+
+          # 编译 x86_64 (静态链接)
+          go build -ldflags "-s -w -buildid= -extldflags '-static'" -tags "jsoniter" -o $GITHUB_WORKSPACE/daed-x86_64 .
+          
+          # 编译 aarch64 (交叉编译 + 静态链接)
+          GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
+          go build -ldflags "-s -w -buildid= -extldflags '-static'" -tags "jsoniter" -o $GITHUB_WORKSPACE/daed-aarch64 .
+
+      - name: Create Auto Release
+        if: steps.check.outputs.update_needed == 'true'
+        uses: ncipollo/release-action@v1
+        with:
+          name: "daed ${{ env.PKG_VER }}-${{ env.SHORT_SHA }}"
+          tag: "${{ env.PKG_VER }}-${{ env.SHORT_SHA }}"
+          body: |
+            ## 自动构建全功能版
+            - **版本:** `${{ env.PKG_VER }}`
+            - **SHA:** `${{ env.NEW_SHA }}`
+            - **包含组件:** Web UI, dae-wing, dae-core (eBPF)
+            - **特性:** 静态编译，包含预编译的 eBPF 字节码。
           artifacts: "daed-*"
           allowUpdates: true
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
