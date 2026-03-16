@@ -1,89 +1,59 @@
-name: Build Packages (debug)
+name: Build Packages
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - VERSION
 
 jobs:
-  debug-build:
+  build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            goarch: amd64
+          - arch: arm64
+            goarch: arm64
+
     steps:
-      - name: Checkout repo (kix-daed)
+      - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Load Version
+      - name: Load VERSION
         run: |
-          echo "VERSION file:"
-          cat VERSION || true
-          echo "version=$(cat VERSION 2>/dev/null || echo unknown)" >> $GITHUB_ENV
+          version=$(grep PKG_VERSION VERSION | cut -d '=' -f2 | tr -d ':')
+          echo "version=$version" >> $GITHUB_ENV
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: Checkout official daed into daed-src
+      - name: Checkout dae-wing
         uses: actions/checkout@v4
         with:
-          repository: daeuniverse/daed
+          repository: daeuniverse/dae-wing
           ref: main
-          path: daed-src
-          fetch-depth: 0
+          path: wing-src
 
-      - name: Inspect daed-src (diagnose)
+      - name: Replace core with your olicesx version
         run: |
-          echo "PWD: $(pwd)"
-          echo "Contents of workspace root:"
-          ls -la
-          echo "Contents of daed-src:"
-          ls -la daed-src || true
-          echo "Git info for daed-src:"
-          if [ -d daed-src/.git ]; then
-            git -C daed-src rev-parse --abbrev-ref HEAD || true
-            git -C daed-src rev-parse HEAD || true
-            git -C daed-src remote -v || true
-          else
-            echo "daed-src/.git not found"
-          fi
-          echo "Searching for go.mod under daed-src (maxdepth 3):"
-          find daed-src -maxdepth 3 -type f -name go.mod -print || true
-          echo "If go.mod exists, show it:"
-          if [ -f daed-src/go.mod ]; then
-            echo "---- daed-src/go.mod ----"
-            sed -n '1,200p' daed-src/go.mod
-          else
-            echo "No go.mod at daed-src root"
-          fi
-
-      - name: Conditional replace + build (only if go.mod found at root)
-        if: ${{ always() }}
-        run: |
-          if [ ! -f daed-src/go.mod ]; then
-            echo "ERROR: no go.mod at daed-src root. Aborting replace/build."
-            echo "Possible causes:"
-            echo " - wrong repository or branch in checkout"
-            echo " - module is in a subdirectory (see find output above)"
-            echo " - checkout failed due to permissions (private repo)"
-            exit 1
-          fi
-
-          cd daed-src
-
-          echo "Current module (go env GOMOD):"
-          go env GOMOD || true
-          echo "Module path from go.mod:"
-          awk '/^module /{print $2; exit}' go.mod || true
-
-          echo "Applying replace: github.com/daeuniverse/dae -> github.com/olicesx/dae@optimize/code-quality-fixes"
+          cd wing-src
           go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@optimize/code-quality-fixes
-          echo "Running go mod tidy (will show errors if replace/module mismatch)"
           go mod tidy
 
-          echo "Build test (linux amd64)"
-          env GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -v ./cmd/daed || (echo "build failed" && exit 1)
-
-      - name: Upload debug logs
-        if: failure()
+      - name: Build daed
         run: |
-          echo "Job failed; logs above contain diagnostic info."
+          cd wing-src
+          mkdir -p ../bin
+          GOOS=linux GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
+            go build -v -trimpath -ldflags "-s -w" \
+            -o ../bin/daed-${{ matrix.arch }} \
+            ./cmd/dae-wing
+
+      - name: Upload Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: daed-${{ env.version }}
+          name: daed-${{ env.version }}
+          files: bin/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
