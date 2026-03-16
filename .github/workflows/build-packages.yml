@@ -1,70 +1,89 @@
-name: Build Packages
+name: Build Packages (debug)
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
-  build:
-    name: Build ${{ matrix.arch_name }}
+  debug-build:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - goarch: amd64
-            arch_name: x86_64
-          - goarch: arm64
-            arch_name: aarch64
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo (kix-daed)
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Load Version
         run: |
-          version=$(cat VERSION)
-          echo "version=$version" >> $GITHUB_ENV
+          echo "VERSION file:"
+          cat VERSION || true
+          echo "version=$(cat VERSION 2>/dev/null || echo unknown)" >> $GITHUB_ENV
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
 
-      - name: Clone official daed source
-        run: |
-          git clone https://github.com/daeuniverse/daed.git daed-src
-          cd daed-src
-          git checkout main
+      - name: Checkout official daed into daed-src
+        uses: actions/checkout@v4
+        with:
+          repository: daeuniverse/daed
+          ref: main
+          path: daed-src
+          fetch-depth: 0
 
-      - name: Replace dae (eBPF core) with olicesx version
+      - name: Inspect daed-src (diagnose)
         run: |
+          echo "PWD: $(pwd)"
+          echo "Contents of workspace root:"
+          ls -la
+          echo "Contents of daed-src:"
+          ls -la daed-src || true
+          echo "Git info for daed-src:"
+          if [ -d daed-src/.git ]; then
+            git -C daed-src rev-parse --abbrev-ref HEAD || true
+            git -C daed-src rev-parse HEAD || true
+            git -C daed-src remote -v || true
+          else
+            echo "daed-src/.git not found"
+          fi
+          echo "Searching for go.mod under daed-src (maxdepth 3):"
+          find daed-src -maxdepth 3 -type f -name go.mod -print || true
+          echo "If go.mod exists, show it:"
+          if [ -f daed-src/go.mod ]; then
+            echo "---- daed-src/go.mod ----"
+            sed -n '1,200p' daed-src/go.mod
+          else
+            echo "No go.mod at daed-src root"
+          fi
+
+      - name: Conditional replace + build (only if go.mod found at root)
+        if: ${{ always() }}
+        run: |
+          if [ ! -f daed-src/go.mod ]; then
+            echo "ERROR: no go.mod at daed-src root. Aborting replace/build."
+            echo "Possible causes:"
+            echo " - wrong repository or branch in checkout"
+            echo " - module is in a subdirectory (see find output above)"
+            echo " - checkout failed due to permissions (private repo)"
+            exit 1
+          fi
+
           cd daed-src
+
+          echo "Current module (go env GOMOD):"
+          go env GOMOD || true
+          echo "Module path from go.mod:"
+          awk '/^module /{print $2; exit}' go.mod || true
+
+          echo "Applying replace: github.com/daeuniverse/dae -> github.com/olicesx/dae@optimize/code-quality-fixes"
           go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@optimize/code-quality-fixes
+          echo "Running go mod tidy (will show errors if replace/module mismatch)"
           go mod tidy
 
-      - name: Build daed Binary
-        env:
-          GOOS: linux
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
-        run: |
-          cd daed-src
-          mkdir -p ../bin/outputs
-          go build -v -trimpath -ldflags "-s -w" \
-            -o ../bin/outputs/daed-${{ matrix.arch_name }} \
-            ./cmd/daed
+          echo "Build test (linux amd64)"
+          env GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -v ./cmd/daed || (echo "build failed" && exit 1)
 
-      - name: Upload binaries
-        uses: ncipollo/release-action@v1
-        with:
-          name: daed_${{ env.version }}
-          tag: daed_${{ env.version }}
-          allowUpdates: true
-          commit: main
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          replacesArtifacts: true
-          artifacts: "bin/outputs/daed-*"
+      - name: Upload debug logs
+        if: failure()
+        run: |
+          echo "Job failed; logs above contain diagnostic info."
