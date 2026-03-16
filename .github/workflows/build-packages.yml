@@ -38,6 +38,7 @@ jobs:
           repository: daeuniverse/dae-wing
           ref: ${{ env.WING_SHA }}
           path: wing-src
+          fetch-depth: 0
 
       - name: Replace core with your olicesx version (SHA)
         run: |
