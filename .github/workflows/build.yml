@@ -1,4 +1,4 @@
-name: Build and Auto Release Full Binaries
+name: Build daed Binary (Direct)
 
 on:
   workflow_dispatch:
@@ -6,140 +6,104 @@ on:
     - cron: "*/30 * * * *"
 
 jobs:
-  check-and-build:
+  check_and_build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            goarch: amd64
+          - arch: arm64
+            goarch: arm64
+
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
 
-      - name: Check Upstream Updates
-        id: check
+      - name: Check & Update Version
+        id: vars
         run: |
-          API_AUTH="Authorization: token ${{ secrets.ACTIONS_DEPLOY_KEY }}"
-          UPSTREAM_DAED=$(curl -s -H "$API_AUTH" https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
+          # 提取上游最新版本号
+          UPSTREAM_DAED=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
+          UPSTREAM_WING=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
+          UPSTREAM_CORE=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
           
-          if [ "$UPSTREAM_DAED" = "null" ] || [ -z "$UPSTREAM_DAED" ]; then
-            echo "Error: Failed to fetch SHA"
-            exit 1
-          fi
-
-          CURRENT_DAED=$(grep "PKG_SOURCE_VERSION:=" daed/Makefile | cut -d= -f2 || echo "none")
+          # 格式化日期版本
+          date_iso=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.committer.date')
+          pkg_version=$(date -d "$date_iso" +%Y.%m.%d)
           
-          if [ "$UPSTREAM_DAED" != "$CURRENT_DAED" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "update_needed=true" >> "$GITHUB_OUTPUT"
-            echo "NEW_SHA=$UPSTREAM_DAED" >> "$GITHUB_OUTPUT"
-          else
-            echo "update_needed=false" >> "$GITHUB_OUTPUT"
-          fi
+          # 构建 Release 标签名
+          VERSION_TAG="${pkg_version}-wing_${UPSTREAM_WING}-core_${UPSTREAM_CORE}"
+          echo "VERSION_TAG=$VERSION_TAG" >> "$GITHUB_ENV"
+          
+          # 如果是手动触发或 Makefile 需要更新，则继续
+          # 这里为了简化，直接克隆上游源码进行编译
+          echo "BUILD_REQUIRED=true" >> "$GITHUB_ENV"
 
-      - name: Update Metadata (Bot)
-        if: steps.check.outputs.update_needed == 'true'
+      - name: Clone Upstream Source
         run: |
-          TARGET_SHA=${{ steps.check.outputs.NEW_SHA }}
-          API_AUTH="Authorization: token ${{ secrets.ACTIONS_DEPLOY_KEY }}"
-          UPSTREAM_WING=$(curl -s -H "$API_AUTH" https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
-          UPSTREAM_CORE=$(curl -s -H "$API_AUTH" https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
-          DATE_ISO=$(curl -s -H "$API_AUTH" https://api.github.com/repos/daeuniverse/daed/commits/$TARGET_SHA | jq -r '.commit.committer.date')
-          
-          [ "$DATE_ISO" = "null" ] && DATE_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          PKG_VERSION=$(date -d "$DATE_ISO" +%Y.%m.%d)
-          SHORT_SHA=$(echo $TARGET_SHA | cut -b 1-7)
-          
-          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=$PKG_VERSION/" ./daed/Makefile
-          sed -i "s/DAED_VERSION:=.*/DAED_VERSION:=daed-$SHORT_SHA/" ./daed/Makefile
-          sed -i "s/WING_VERSION:=.*/WING_VERSION:=wing-$UPSTREAM_WING/" ./daed/Makefile
-          sed -i "s/CORE_VERSION:=.*/CORE_VERSION:=core-$UPSTREAM_CORE/" ./daed/Makefile
-          sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=$TARGET_SHA/" ./daed/Makefile
-          
-          echo "PKG_VER=$PKG_VERSION" >> "$GITHUB_ENV"
-          echo "FINAL_SHA=$TARGET_SHA" >> "$GITHUB_ENV"
-          echo "SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"
+          git clone --recursive https://github.com/daeuniverse/daed.git source
+          cd source
+          # 切换到主项目指定的 commit (可选)
+          # git checkout ${{ steps.vars.outputs.UPSTREAM_DAED }}
 
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-          git add .
-          git commit -m "chore: update to $PKG_VERSION ($SHORT_SHA)" || echo "No changes"
-
-      - name: Push Repository Changes
-        if: steps.check.outputs.update_needed == 'true'
-        uses: ad-m/github-push-action@master
-        with:
-          github_token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          branch: kix
-
-      - name: Install Build Toolchain
-        if: steps.check.outputs.update_needed == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang llvm libbpf-dev libelf-dev pkg-config gcc-aarch64-linux-gnu
-
-      - name: Setup Node & Go
-        if: steps.check.outputs.update_needed == 'true'
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-      - if: steps.check.outputs.update_needed == 'true'
+
+      - name: Build Frontend (Web)
+        run: |
+          cd source
+          npm install -g pnpm
+          pnpm install
+          pnpm build
+
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          # 升级到 Go 1.24 以满足 ebpf v0.21.0 的要求
-          go-version: '1.24'
+          go-version: '1.22'
 
-      - name: Compile Full-Feature Binaries
-        if: steps.check.outputs.update_needed == 'true'
+      - name: Install LLVM/Clang (for eBPF)
         run: |
-          # 1. 初始化
-          git clone --recursive https://github.com/daeuniverse/daed.git build_src
-          cd build_src
-          git checkout ${{ env.FINAL_SHA }}
-          git submodule update --init --recursive
+          sudo apt-get update
+          sudo apt-get install -y clang-15 llvm-15 libbpf-dev
+          sudo ln -s /usr/bin/clang-15 /usr/bin/clang
 
-          # 2. 前端构建 (容错)
-          npm install -g pnpm@10
-          pnpm install --no-frozen-lockfile
-          # 只要 apps/web 下生成了 dist，即使整体报错也继续
-          pnpm build --continue || echo "Frontend warnings, continuing..."
+      - name: Build Backend (Wing)
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          cd source/wing
+          # 使用 bundle 模式将 ../apps/web/dist 嵌入
+          make APPNAME=daed WEB_DIST=../apps/web/dist bundle
+          mv daed ../../daed-${{ matrix.arch }}
 
-          # 3. 寻找后端目录 (这里是关键)
-          # 寻找包含 go.mod 且里面包含 main 包的目录
-          BACKEND_DIR=$(find . -name "go.mod" -exec grep -l "package main" -r $(dirname {}) \; | head -n 1 | xargs dirname)
-          echo "Backend found in: $BACKEND_DIR"
-          cd "$BACKEND_DIR"
+      - name: Push Makefile Update (Optional)
+        # 如果你想保持你仓库里的 Makefile 也是最新的，可以在这里执行 push 逻辑
+        if: matrix.arch == 'x86_64' 
+        run: |
+          # 此处逻辑同你之前的 Git 推送逻辑，使用 ACTIONS_DEPLOY_KEY
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          # 更新本地 Makefile 略...
+          # git push ... 
 
-          # 4. 安装工具并在后端目录下执行生成
-          go install github.com/cilium/ebpf/cmd/bpf2go@latest
-          go generate ./...
-
-          # 5. 静态编译输出
-          export CGO_ENABLED=1
-          
-          # x86_64
-          go build -ldflags "-s -w -buildid= -extldflags '-static'" -tags "jsoniter" -o $GITHUB_WORKSPACE/daed-x86_64 .
-          
-          # aarch64
-          GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
-          go build -ldflags "-s -w -buildid= -extldflags '-static'" -tags "jsoniter" -o $GITHUB_WORKSPACE/daed-aarch64 .
-
-      - name: Create Auto Release
-        if: steps.check.outputs.update_needed == 'true'
+      - name: Upload Release
         uses: ncipollo/release-action@v1
         with:
-          name: "daed ${{ env.PKG_VER }}-${{ env.SHORT_SHA }}"
-          tag: "${{ env.PKG_VER }}-${{ env.SHORT_SHA }}"
-          body: |
-            ## 自动构建全功能版
-            - **内核支持**: 包含预编译 eBPF 字节码
-            - **Go版本**: 1.24+
-            - **静态链接**: CGO-Static
-          artifacts: "daed-*"
+          name: daed_${{ env.VERSION_TAG }}
+          tag: daed_${{ env.VERSION_TAG }}
           allowUpdates: true
+          replacesArtifacts: true
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-
-      - name: Cleanup Logs
-        uses: Mattraks/delete-workflow-runs@main
-        with:
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          repository: ${{ github.repository }}
-          retain_days: 1
+          artifacts: "daed-${{ matrix.arch }}"
+          body: |
+            Direct Compiled Binary (Non-SDK)
+            Architecture: ${{ matrix.arch }}
+            Version: ${{ env.VERSION_TAG }}
