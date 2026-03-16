@@ -22,6 +22,13 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Load VERSION
+        run: |
+          version=$(grep PKG_VERSION VERSION | cut -d '=' -f2 | tr -d ':')
+          core_sha=$(grep CORE_VERSION VERSION | sed 's/.*core-//')
+          echo "version=$version" >> $GITHUB_ENV
+          echo "CORE_SHA=$core_sha" >> $GITHUB_ENV
+
       - name: Checkout dae-wing
         uses: actions/checkout@v4
         with:
@@ -32,7 +39,7 @@ jobs:
       - name: Replace core with your olicesx version
         run: |
           cd wing-src
-          go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@optimize/code-quality-fixes
+          go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@${CORE_SHA}
           go mod tidy
 
       - name: Build daed
@@ -49,3 +56,12 @@ jobs:
         with:
           name: daed-${{ matrix.arch }}
           path: bin/daed-${{ matrix.arch }}
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: daed-${{ env.version }}-${{ env.CORE_SHA }}
+          name: daed-${{ env.version }}-${{ env.CORE_SHA }}
+          files: bin/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
