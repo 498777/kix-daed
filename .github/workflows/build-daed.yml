@@ -1,0 +1,72 @@
+name: Build daed
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Read version from Makefile
+        id: version
+        run: |
+          latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
+          wing_commit=$(grep "WING_VERSION:=wing-" daed/Makefile | sed 's/.*wing-//' | head -n 1)
+          core_commit=$(grep "CORE_VERSION:=core-" daed/Makefile | sed 's/.*core-//' | head -n 1)
+          version="daed_${latest_commit}-wing_${wing_commit}-core_${core_commit}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Replace core with your fork
+        run: |
+          go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@optimize/code-quality-fixes
+          go mod tidy
+
+      - name: Build daed binary
+        run: |
+          if [ "${{ matrix.arch }}" = "amd64" ]; then GOARCH=amd64; fi
+          if [ "${{ matrix.arch }}" = "arm64" ]; then GOARCH=arm64; fi
+          GOOS=linux GOARCH=$GOARCH go build -o daed-${{ matrix.arch }} ./cmd/daed
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: daed-${{ matrix.arch }}
+          path: daed-${{ matrix.arch }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Publish Release
+        uses: ncipollo/release-action@v1
+        with:
+          name: ${{ needs.build.outputs.version }}
+          tag: ${{ needs.build.outputs.version }}
+          allowUpdates: true
+          replacesArtifacts: true
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          artifacts: "./artifacts/**"
