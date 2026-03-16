@@ -35,6 +35,8 @@ jobs:
 
       - name: Replace core with your fork
         run: |
+          cd daed
+          
           go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@optimize/code-quality-fixes
           go mod tidy
 
