@@ -22,11 +22,6 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Load VERSION
-        run: |
-          version=$(grep PKG_VERSION VERSION | cut -d '=' -f2 | tr -d ':')
-          echo "version=$version" >> $GITHUB_ENV
-
       - name: Checkout dae-wing
         uses: actions/checkout@v4
         with:
@@ -49,11 +44,8 @@ jobs:
             -o ../bin/daed-${{ matrix.arch }} \
             ./cmd/dae-wing
 
-      - name: Upload Release
-        uses: softprops/action-gh-release@v1
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: daed-${{ env.version }}
-          name: daed-${{ env.version }}
-          files: bin/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          name: daed-${{ matrix.arch }}
+          path: bin/daed-${{ matrix.arch }}
