@@ -18,12 +18,21 @@ jobs:
       - name: Check Upstream Updates
         id: check
         run: |
-          UPSTREAM_DAED=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
+          # 使用 ACTIONS_DEPLOY_KEY 认证 API 请求，防止频率限制导致返回 null
+          API_AUTH="Authorization: token ${{ secrets.ACTIONS_DEPLOY_KEY }}"
+          
+          UPSTREAM_DAED=$(curl -s -H "$API_AUTH" https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
+          
+          if [ "$UPSTREAM_DAED" = "null" ] || [ -z "$UPSTREAM_DAED" ]; then
+            echo "Error: Failed to fetch SHA (API limit or invalid token)"
+            exit 1
+          fi
+
           CURRENT_DAED=$(grep "PKG_SOURCE_VERSION:=" daed/Makefile | cut -d= -f2 || echo "none")
           
           if [ "$UPSTREAM_DAED" != "$CURRENT_DAED" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "update_needed=true" >> "$GITHUB_OUTPUT"
-            echo "NEW_SHA=$UPSTREAM_DAED" >> "$GITHUB_ENV"
+            echo "NEW_SHA=$UPSTREAM_DAED" >> "$GITHUB_OUTPUT"
           else
             echo "update_needed=false" >> "$GITHUB_OUTPUT"
           fi
@@ -31,24 +40,40 @@ jobs:
       - name: Update Metadata (Bot)
         if: steps.check.outputs.update_needed == 'true'
         run: |
-          UPSTREAM_WING=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
-          UPSTREAM_CORE=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
-          DATE_ISO=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.committer.date')
-          PKG_VERSION=$(date -d "$DATE_ISO" +%Y.%m.%d)
+          TARGET_SHA=${{ steps.check.outputs.NEW_SHA }}
+          API_AUTH="Authorization: token ${{ secrets.ACTIONS_DEPLOY_KEY }}"
           
+          # 获取子模块最新 SHA
+          UPSTREAM_WING=$(curl -s -H "$API_AUTH" https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
+          UPSTREAM_CORE=$(curl -s -H "$API_AUTH" https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
+          
+          # 解析日期
+          DATE_ISO=$(curl -s -H "$API_AUTH" https://api.github.com/repos/daeuniverse/daed/commits/$TARGET_SHA | jq -r '.commit.committer.date')
+          
+          if [ "$DATE_ISO" = "null" ] || [ -z "$DATE_ISO" ]; then
+            PKG_VERSION=$(date -u +"%Y.%m.%d")
+          else
+            PKG_VERSION=$(date -d "$DATE_ISO" +%Y.%m.%d)
+          fi
+          
+          SHORT_SHA=$(echo $TARGET_SHA | cut -b 1-7)
+          
+          # 更新 Makefile 内容
           sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=$PKG_VERSION/" ./daed/Makefile
-          sed -i "s/DAED_VERSION:=.*/DAED_VERSION:=daed-$(echo ${{ env.NEW_SHA }} | cut -b 1-7)/" ./daed/Makefile
+          sed -i "s/DAED_VERSION:=.*/DAED_VERSION:=daed-$SHORT_SHA/" ./daed/Makefile
           sed -i "s/WING_VERSION:=.*/WING_VERSION:=wing-$UPSTREAM_WING/" ./daed/Makefile
           sed -i "s/CORE_VERSION:=.*/CORE_VERSION:=core-$UPSTREAM_CORE/" ./daed/Makefile
-          sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${{ env.NEW_SHA }}/" ./daed/Makefile
+          sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=$TARGET_SHA/" ./daed/Makefile
           
+          # 设置环境变量
           echo "PKG_VER=$PKG_VERSION" >> "$GITHUB_ENV"
-          echo "SHORT_SHA=$(echo ${{ env.NEW_SHA }} | cut -b 1-7)" >> "$GITHUB_ENV"
+          echo "FINAL_SHA=$TARGET_SHA" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"
 
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
           git add .
-          git commit -m "chore: update versions to $PKG_VERSION" || echo "No changes"
+          git commit -m "chore: update to $PKG_VERSION ($SHORT_SHA)" || echo "No changes"
 
       - name: Push Repository Changes
         if: steps.check.outputs.update_needed == 'true'
@@ -77,36 +102,32 @@ jobs:
       - name: Compile Full-Feature Binaries
         if: steps.check.outputs.update_needed == 'true'
         run: |
-          # 1. 源码准备
+          # 1. 初始化源码
           git clone --recursive https://github.com/daeuniverse/daed.git build_src
           cd build_src
-          git checkout ${{ env.NEW_SHA }}
+          git checkout ${{ env.FINAL_SHA }}
           git submodule update --init --recursive
 
-          # 2. 前端构建 (容错模式)
+          # 2. 前端构建 (容错处理)
           npm install -g pnpm@10
           pnpm install --no-frozen-lockfile
-          pnpm build --continue || echo "Warning: Frontend build incomplete, but continuing..."
+          pnpm build --continue || echo "Warning: Partial frontend build failure, moving to backend..."
 
-          # 3. 安装 eBPF 代码生成工具
+          # 3. 生成 eBPF 字节码
           go install github.com/cilium/ebpf/cmd/bpf2go@latest
-
-          # 4. 生成 BPF 相关的 Go 代码 (解决 undefined: bpfObjects)
-          # 这一步非常重要，必须在整个源码树执行
           go generate ./...
 
-          # 5. 定位并编译后端
+          # 4. 定位 Go 核心并编译
           GO_DIR=$(find . -name "go.mod" -exec grep -l "package main" -r $(dirname {}) \; | head -n 1 | xargs dirname)
           [ -z "$GO_DIR" ] && GO_DIR="."
           cd "$GO_DIR"
 
-          # 开启 CGO 以支持 eBPF/dae-core 的静态编译
           export CGO_ENABLED=1
-
-          # 编译 x86_64 (静态链接)
+          
+          # x86_64 静态编译
           go build -ldflags "-s -w -buildid= -extldflags '-static'" -tags "jsoniter" -o $GITHUB_WORKSPACE/daed-x86_64 .
           
-          # 编译 aarch64 (交叉编译 + 静态链接)
+          # aarch64 静态编译
           GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
           go build -ldflags "-s -w -buildid= -extldflags '-static'" -tags "jsoniter" -o $GITHUB_WORKSPACE/daed-aarch64 .
 
@@ -119,9 +140,9 @@ jobs:
           body: |
             ## 自动构建全功能版
             - **版本:** `${{ env.PKG_VER }}`
-            - **SHA:** `${{ env.NEW_SHA }}`
-            - **包含组件:** Web UI, dae-wing, dae-core (eBPF)
-            - **特性:** 静态编译，包含预编译的 eBPF 字节码。
+            - **提交 SHA:** `${{ env.FINAL_SHA }}`
+            - **组件:** Web Dashboard, dae-wing, dae-core (eBPF)
+            - **编译环境:** Ubuntu 22.04 + Go 1.23 + Clang eBPF
           artifacts: "daed-*"
           allowUpdates: true
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
