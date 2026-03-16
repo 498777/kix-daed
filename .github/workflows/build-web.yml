@@ -43,7 +43,7 @@ jobs:
           echo "WING_VERSION:=wing-${WING_SHA}" >> VERSION
           echo "CORE_VERSION:=core-${CORE_SHA}" >> VERSION
 
-          echo "version=${PKG_VERSION}-${DAED_SHA}" >> $GITHUB_ENV
+          echo "version=${PKG_VERSION}-${DAED_SHA}-${WING_SHA}-${CORE_SHA}" >> $GITHUB_ENV
 
       - name: Commit VERSION
         run: |
