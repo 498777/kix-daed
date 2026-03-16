@@ -59,7 +59,7 @@ jobs:
         uses: ad-m/github-push-action@master
         with:
           github_token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          branch: kix
+          branch: main
 
       - name: Setup Node & Go
         if: steps.check.outputs.update_needed == 'true'
@@ -84,10 +84,10 @@ jobs:
           pnpm install && pnpm build
           cd ..
 
-          # 2. 编译 x86_64 二进制 (移除 -linux)
+          # 2. 编译 x86_64 二进制 
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o ../daed-x86_64 .
           
-          # 3. 编译 aarch64 二进制 (移除 -linux)
+          # 3. 编译 aarch64 二进制 
           GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w" -o ../daed-aarch64 .
 
       - name: Create Auto Release
