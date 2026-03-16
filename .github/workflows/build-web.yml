@@ -24,8 +24,9 @@ jobs:
       - name: Fetch Upstream Commits
         id: upstream
         run: |
-          DAED_FULL=$(curl -s "https://api.github.com/repos/daeuniverse/daed/commits/main" | jq -r '.sha')
+          DAED_FULL=$(curl -s "https://api.github.com/repos/olicesx/dae/commits?sha=optimize/code-quality-fixes" | jq -r '.[0].sha')
           DAED_SHA=$(echo "$DAED_FULL" | cut -c1-7)
+
           WING_SHA=$(curl -s "https://api.github.com/repos/daeuniverse/dae-wing/commits/main" | jq -r '.sha' | cut -c1-7)
           CORE_SHA=$(curl -s "https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes" | jq -r '.sha' | cut -c1-7)
 
@@ -36,7 +37,7 @@ jobs:
 
       - name: Generate Version
         run: |
-          DAED_DATE=$(curl -s "https://api.github.com/repos/daeuniverse/daed/commits/main" | jq -r '.commit.author.date')
+          DAED_DATE=$(curl -s "https://api.github.com/repos/olicesx/dae/commits/$DAED_FULL" | jq -r '.commit.author.date')
           DATE_FMT=$(date --date="$DAED_DATE" "+%Y-%m-%d")
           version="${DATE_FMT}-${DAED_SHA}"
           echo "version=$version" >> $GITHUB_ENV
