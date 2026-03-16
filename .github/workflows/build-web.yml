@@ -14,6 +14,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install Tools
         run: |
@@ -23,25 +24,31 @@ jobs:
       - name: Fetch Upstream Commits
         id: upstream
         run: |
-          DAED_SHA=$(curl -s "https://api.github.com/repos/daeuniverse/daed/commits?sha=main" | jq -r '.[0].sha' | cut -c1-7)
-          WING_SHA=$(curl -s "https://api.github.com/repos/daeuniverse/dae-wing/commits?sha=main" | jq -r '.[0].sha' | cut -c1-7)
-          CORE_SHA=$(curl -s "https://api.github.com/repos/olicesx/dae/commits?sha=optimize/code-quality-fixes" | jq -r '.[0].sha' | cut -c1-7)
+          DAED_FULL=$(curl -s "https://api.github.com/repos/daeuniverse/daed/commits/main" | jq -r '.sha')
+          DAED_SHA=$(echo "$DAED_FULL" | cut -c1-7)
+          WING_SHA=$(curl -s "https://api.github.com/repos/daeuniverse/dae-wing/commits/main" | jq -r '.sha' | cut -c1-7)
+          CORE_SHA=$(curl -s "https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes" | jq -r '.sha' | cut -c1-7)
 
           echo "DAED_SHA=$DAED_SHA" >> $GITHUB_ENV
+          echo "DAED_FULL=$DAED_FULL" >> $GITHUB_ENV
           echo "WING_SHA=$WING_SHA" >> $GITHUB_ENV
           echo "CORE_SHA=$CORE_SHA" >> $GITHUB_ENV
 
       - name: Generate Version
         run: |
-          timestamp=$(date -u +"%Y%m%d-%H%M%S")
-          version="${timestamp}-daed_${DAED_SHA}-wing_${WING_SHA}-core_${CORE_SHA}"
+          DAED_DATE=$(curl -s "https://api.github.com/repos/daeuniverse/daed/commits/main" | jq -r '.commit.author.date')
+          DATE_FMT=$(date --date="$DAED_DATE" "+%Y-%m-%d")
+          version="${DATE_FMT}-${DAED_SHA}"
           echo "version=$version" >> $GITHUB_ENV
           echo "$version" > VERSION
+
+      - name: Fetch tags
+        run: git fetch --tags
 
       - name: Check if version changed
         id: check
         run: |
-          if git tag | grep -q "daed_${version}"; then
+          if git tag | grep -q "^${version}$"; then
             echo "changed=false" >> $GITHUB_ENV
           else
             echo "changed=true" >> $GITHUB_ENV
@@ -53,11 +60,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config --local --unset-all http.https://github.com/.extraheader || true
-          
           git add VERSION
           git commit -m "Sync upstream: $version"
-          
-          git push https://x-access-token:${{ secrets.ACTIONS_DEPLOY_KEY }}@github.com/${{ github.repository }}.git HEAD:main
+          git tag "$version"
+          git push https://x-access-token:${{ secrets.ACTIONS_DEPLOY_KEY }}@github.com/${{ github.repository }}.git HEAD:main --tags
 
       - name: Cleanup old workflow logs
         if: env.changed == 'true'
