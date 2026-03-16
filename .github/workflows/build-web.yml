@@ -63,11 +63,17 @@ jobs:
           sed -i '/PKG_SOURCE_VERSION:/d' ./daed/Makefile
           sed -i "17 a PKG_SOURCE_VERSION:=$latest_commit_full" ./daed/Makefile
 
-      - name: Commit & Push
+      - name: Commit & Push (GitHub Bot)
         if: steps.check.outputs.update_needed == 'true'
         run: |
-          git config --global user.email "simonsqiu@foxmail.com"
-          git config --global user.name "SimonsQiu"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          
           git add .
-          git commit -m "Update metadata $(date +'%Y-%m-%d %H:%M:%S')"
-          git push origin main
+          
+          if ! git diff --cached --quiet; then
+            git commit -m "Update metadata $(date +'%Y-%m-%d %H:%M:%S')"
+            git push origin HEAD:main
+          else
+            echo "No changes detected, skipping commit."
+          fi
