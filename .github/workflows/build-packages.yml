@@ -40,7 +40,7 @@ jobs:
           cd daed-src
           git checkout main
 
-      - name: Replace core with olicesx version
+      - name: Replace dae (eBPF core) with olicesx version
         run: |
           cd daed-src
           go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@optimize/code-quality-fixes
