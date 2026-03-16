@@ -1,0 +1,113 @@
+name: Build and Auto Release
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check Upstream Updates
+        id: check
+        run: |
+          # 获取上游最新提交 SHA
+          UPSTREAM_DAED=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
+          CURRENT_DAED=$(grep "PKG_SOURCE_VERSION:=" daed/Makefile | cut -d= -f2 || echo "none")
+
+          if [ "$UPSTREAM_DAED" != "$CURRENT_DAED" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "update_needed=true" >> "$GITHUB_OUTPUT"
+            echo "NEW_SHA=$UPSTREAM_DAED" >> "$GITHUB_ENV"
+          else
+            echo "update_needed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update Makefile (Bot)
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          # 获取各组件版本
+          UPSTREAM_WING=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
+          UPSTREAM_CORE=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
+          DATE_ISO=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.committer.date')
+          PKG_VERSION=$(date -d "$DATE_ISO" +%Y.%m.%d)
+          
+          # 写入 Makefile
+          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=$PKG_VERSION/" ./daed/Makefile
+          sed -i "s/DAED_VERSION:=.*/DAED_VERSION:=daed-$(echo ${{ env.NEW_SHA }} | cut -b 1-7)/" ./daed/Makefile
+          sed -i "s/WING_VERSION:=.*/WING_VERSION:=wing-$UPSTREAM_WING/" ./daed/Makefile
+          sed -i "s/CORE_VERSION:=.*/CORE_VERSION:=core-$UPSTREAM_CORE/" ./daed/Makefile
+          sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${{ env.NEW_SHA }}/" ./daed/Makefile
+          
+          echo "PKG_VER=$PKG_VERSION" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=$(echo ${{ env.NEW_SHA }} | cut -b 1-7)" >> "$GITHUB_ENV"
+
+          # 机器人身份配置
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git add .
+          git commit -m "chore: update daed to $PKG_VERSION" || echo "No changes"
+
+      - name: Push Updates
+        if: steps.check.outputs.update_needed == 'true'
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          branch: kix
+
+      - name: Setup Node & Go
+        if: steps.check.outputs.update_needed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - if: steps.check.outputs.update_needed == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build Binaries
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          git clone --recursive https://github.com/daeuniverse/daed.git build_src
+          cd build_src
+          git checkout ${{ env.NEW_SHA }}
+
+          # 1. 构建 Web 前端
+          cd web
+          npm install -g pnpm
+          pnpm install && pnpm build
+          cd ..
+
+          # 2. 编译 x86_64 二进制 (移除 -linux)
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o ../daed-x86_64 .
+          
+          # 3. 编译 aarch64 二进制 (移除 -linux)
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w" -o ../daed-aarch64 .
+
+      - name: Create Auto Release
+        if: steps.check.outputs.update_needed == 'true'
+        uses: ncipollo/release-action@v1
+        with:
+          name: "daed ${{ env.PKG_VER }}-${{ env.SHORT_SHA }}"
+          tag: "${{ env.PKG_VER }}-${{ env.SHORT_SHA }}"
+          body: |
+            ## 自动构建详情
+            - **版本日期:** `${{ env.PKG_VER }}`
+            - **主程序 SHA:** `${{ env.NEW_SHA }}`
+            - **构建状态:** 成功
+          artifacts: "daed-*"
+          allowUpdates: true
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+
+      - name: Cleanup Logs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          repository: ${{ github.repository }}
+          retain_days: 1
