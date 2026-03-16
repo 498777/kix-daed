@@ -18,13 +18,11 @@ jobs:
       - name: Check Upstream Updates
         id: check
         run: |
-          # 使用 ACTIONS_DEPLOY_KEY 认证 API 请求，防止频率限制导致返回 null
           API_AUTH="Authorization: token ${{ secrets.ACTIONS_DEPLOY_KEY }}"
-          
           UPSTREAM_DAED=$(curl -s -H "$API_AUTH" https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
           
           if [ "$UPSTREAM_DAED" = "null" ] || [ -z "$UPSTREAM_DAED" ]; then
-            echo "Error: Failed to fetch SHA (API limit or invalid token)"
+            echo "Error: Failed to fetch SHA"
             exit 1
           fi
 
@@ -42,30 +40,20 @@ jobs:
         run: |
           TARGET_SHA=${{ steps.check.outputs.NEW_SHA }}
           API_AUTH="Authorization: token ${{ secrets.ACTIONS_DEPLOY_KEY }}"
-          
-          # 获取子模块最新 SHA
           UPSTREAM_WING=$(curl -s -H "$API_AUTH" https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
           UPSTREAM_CORE=$(curl -s -H "$API_AUTH" https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
-          
-          # 解析日期
           DATE_ISO=$(curl -s -H "$API_AUTH" https://api.github.com/repos/daeuniverse/daed/commits/$TARGET_SHA | jq -r '.commit.committer.date')
           
-          if [ "$DATE_ISO" = "null" ] || [ -z "$DATE_ISO" ]; then
-            PKG_VERSION=$(date -u +"%Y.%m.%d")
-          else
-            PKG_VERSION=$(date -d "$DATE_ISO" +%Y.%m.%d)
-          fi
-          
+          [ "$DATE_ISO" = "null" ] && DATE_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          PKG_VERSION=$(date -d "$DATE_ISO" +%Y.%m.%d)
           SHORT_SHA=$(echo $TARGET_SHA | cut -b 1-7)
           
-          # 更新 Makefile 内容
           sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=$PKG_VERSION/" ./daed/Makefile
           sed -i "s/DAED_VERSION:=.*/DAED_VERSION:=daed-$SHORT_SHA/" ./daed/Makefile
           sed -i "s/WING_VERSION:=.*/WING_VERSION:=wing-$UPSTREAM_WING/" ./daed/Makefile
           sed -i "s/CORE_VERSION:=.*/CORE_VERSION:=core-$UPSTREAM_CORE/" ./daed/Makefile
           sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=$TARGET_SHA/" ./daed/Makefile
           
-          # 设置环境变量
           echo "PKG_VER=$PKG_VERSION" >> "$GITHUB_ENV"
           echo "FINAL_SHA=$TARGET_SHA" >> "$GITHUB_ENV"
           echo "SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"
@@ -82,12 +70,11 @@ jobs:
           github_token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           branch: kix
 
-      - name: Install Build Toolchain (eBPF & Cross-Compile)
+      - name: Install Build Toolchain
         if: steps.check.outputs.update_needed == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libbpf-dev libelf-dev pkg-config \
-          gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get install -y clang llvm libbpf-dev libelf-dev pkg-config gcc-aarch64-linux-gnu
 
       - name: Setup Node & Go
         if: steps.check.outputs.update_needed == 'true'
@@ -97,37 +84,41 @@ jobs:
       - if: steps.check.outputs.update_needed == 'true'
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          # 升级到 Go 1.24 以满足 ebpf v0.21.0 的要求
+          go-version: '1.24'
 
       - name: Compile Full-Feature Binaries
         if: steps.check.outputs.update_needed == 'true'
         run: |
-          # 1. 初始化源码
+          # 1. 初始化
           git clone --recursive https://github.com/daeuniverse/daed.git build_src
           cd build_src
           git checkout ${{ env.FINAL_SHA }}
           git submodule update --init --recursive
 
-          # 2. 前端构建 (容错处理)
+          # 2. 前端构建 (容错)
           npm install -g pnpm@10
           pnpm install --no-frozen-lockfile
-          pnpm build --continue || echo "Warning: Partial frontend build failure, moving to backend..."
+          # 只要 apps/web 下生成了 dist，即使整体报错也继续
+          pnpm build --continue || echo "Frontend warnings, continuing..."
 
-          # 3. 生成 eBPF 字节码
+          # 3. 寻找后端目录 (这里是关键)
+          # 寻找包含 go.mod 且里面包含 main 包的目录
+          BACKEND_DIR=$(find . -name "go.mod" -exec grep -l "package main" -r $(dirname {}) \; | head -n 1 | xargs dirname)
+          echo "Backend found in: $BACKEND_DIR"
+          cd "$BACKEND_DIR"
+
+          # 4. 安装工具并在后端目录下执行生成
           go install github.com/cilium/ebpf/cmd/bpf2go@latest
           go generate ./...
 
-          # 4. 定位 Go 核心并编译
-          GO_DIR=$(find . -name "go.mod" -exec grep -l "package main" -r $(dirname {}) \; | head -n 1 | xargs dirname)
-          [ -z "$GO_DIR" ] && GO_DIR="."
-          cd "$GO_DIR"
-
+          # 5. 静态编译输出
           export CGO_ENABLED=1
           
-          # x86_64 静态编译
+          # x86_64
           go build -ldflags "-s -w -buildid= -extldflags '-static'" -tags "jsoniter" -o $GITHUB_WORKSPACE/daed-x86_64 .
           
-          # aarch64 静态编译
+          # aarch64
           GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
           go build -ldflags "-s -w -buildid= -extldflags '-static'" -tags "jsoniter" -o $GITHUB_WORKSPACE/daed-aarch64 .
 
@@ -139,10 +130,9 @@ jobs:
           tag: "${{ env.PKG_VER }}-${{ env.SHORT_SHA }}"
           body: |
             ## 自动构建全功能版
-            - **版本:** `${{ env.PKG_VER }}`
-            - **提交 SHA:** `${{ env.FINAL_SHA }}`
-            - **组件:** Web Dashboard, dae-wing, dae-core (eBPF)
-            - **编译环境:** Ubuntu 22.04 + Go 1.23 + Clang eBPF
+            - **内核支持**: 包含预编译 eBPF 字节码
+            - **Go版本**: 1.24+
+            - **静态链接**: CGO-Static
           artifacts: "daed-*"
           allowUpdates: true
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
