@@ -39,6 +39,8 @@ jobs:
           ref: ${{ env.WING_SHA }}
           path: wing-src
           fetch-depth: 0
+          persist-credentials: false
+          clean: true
 
       - name: Replace core with your olicesx version (SHA)
         run: |
