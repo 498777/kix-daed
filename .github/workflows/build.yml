@@ -82,55 +82,12 @@ jobs:
           git checkout ${{ env.NEW_SHA }}
           git submodule update --init --recursive
 
-          # 2. 绕过 Monorepo 错误，精准构建前端面板
+          # 2. 全量构建前端及其内部依赖
           npm install -g pnpm@10
           pnpm install --no-frozen-lockfile
           
-          # 寻找前端核心目录 (新版通常在 apps/daed 或 apps/web)
-          FE_PATH=$(find . -maxdepth 3 -name "package.json" | grep -E "apps/daed|apps/web|gui|web" | head -n 1 | xargs dirname)
-          
-          if [ -n "$FE_PATH" ]; then
-            echo "Building frontend in $FE_PATH..."
-            cd "$FE_PATH"
-            # 使用 --if-present 避免脚本不存在报错，忽略某些无关的 lint 错误
-            pnpm build || echo "Frontend build had warnings but proceeding to check for dist..."
-            cd -
-          else
-            echo "Could not find specific frontend app, trying root build..."
-            pnpm build --continue || echo "Proceeding with caution..."
-          fi
+          # 执行全量构建以确保 packages 中的依赖（如 dae-lsp）被正确编译
+          # 即使有个别辅助包报错也继续，以便生成核心 dist
+          pnpm build --continue || echo "Full build finished with some issues, checking if core web dist exists..."
 
-          # 3. 生成 eBPF 字节码并构建后端
-          # 确保在 build_src 根目录
-          go generate ./...
-          
-          # 静态编译 x86_64
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
-          go build -ldflags "-s -w -buildid=" -tags "jsoniter" -o ../daed-x86_64 .
-          
-          # 静态编译 aarch64
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
-          go build -ldflags "-s -w -buildid=" -tags "jsoniter" -o ../daed-aarch64 .
-
-      - name: Create Auto Release
-        if: steps.check.outputs.update_needed == 'true'
-        uses: ncipollo/release-action@v1
-        with:
-          name: "daed ${{ env.PKG_VER }}-${{ env.SHORT_SHA }}"
-          tag: "${{ env.PKG_VER }}-${{ env.SHORT_SHA }}"
-          body: |
-            ## 自动构建全功能版
-            - **版本:** `${{ env.PKG_VER }}`
-            - **程序 SHA:** `${{ env.NEW_SHA }}`
-            - **包含组件:** Web UI (Dashboard), dae-wing, dae-core (eBPF 内核)
-            - **注意:** 该二进制已静态链接，支持大多数 Linux 发行版。
-          artifacts: "daed-*"
-          allowUpdates: true
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-
-      - name: Cleanup Logs
-        uses: Mattraks/delete-workflow-runs@main
-        with:
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          repository: ${{ github.repository }}
-          retain_days: 1
+          # 3. 动态定位 Go 主程序目录并
