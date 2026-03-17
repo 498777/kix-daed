@@ -1,0 +1,70 @@
+name: Build Binary Releases
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }} binary
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            goarch: arm64
+          - arch: x86_64
+            goarch: amd64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22' # 根据你的项目需求调整版本
+
+      - name: Init Build Dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install clang llvm jq
+          # 获取版本号（保留你原有的逻辑）
+          latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1 || echo "latest")
+          echo "version=$latest_commit" >> "$GITHUB_ENV"
+
+      - name: Compile Binary
+        run: |
+          # 创建存放二进制文件的目录
+          mkdir -p ./release
+          
+          # 这里假设你的源码在 daed 目录下，且使用 Go 编译
+          # 如果是 Rust 或其他语言，请修改对应的编译命令
+          cd daed
+          GOOS=linux GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o ../release/daed-linux-${{ matrix.arch }}
+          
+          # 如果有其他组件如 wing，也在此处编译
+          # GOOS=linux GOARCH=${{ matrix.goarch }} go build -o ../release/wing-linux-${{ matrix.arch }} ./wing
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.arch }}
+          path: ./release/*
+
+      - name: Release and Upload Binaries
+        uses: ncipollo/release-action@v1
+        with:
+          name: daed_binaries_${{ env.version }}
+          allowUpdates: true
+          tag: bin_${{ env.version }}
+          commit: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+          replacesArtifacts: true
+          artifacts: "./release/*"
