@@ -3,66 +3,94 @@ name: Build packages
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
+    name: Build ${{ matrix.goarch }}
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        arch:
-          - aarch64_generic    
-          - x86_64
-        sdk:
-          - openwrt-24.10
+        include:
+          - goarch: amd64
+            goos: linux
+            cc: gcc
+          - goarch: arm64
+            goos: linux
+            cc: aarch64-linux-gnu-gcc
 
     steps:
-      - uses: actions/checkout@main
+      - name: Checkout daed
+        uses: actions/checkout@v4
         with:
+          repository: daeuniverse/daed
+          submodules: recursive
           fetch-depth: 0
 
-      - name: Get node-empty
-        run: |
-          git clone https://github.com/sbwml/node-empty
-
-      - name: Init build dependencies
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo swapoff -a
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install clang llvm npm jq
-          sudo npm install -g pnpm n taze
-          sudo n stable
-          latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
-          echo "version=$latest_commit" >> "$GITHUB_ENV"
-
-      - name: Building packages
-        uses: sbwml/openwrt-gh-action-sdk@go1.26
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEEDNAME: packages_ci
-          PACKAGES: daed
-          NO_REFRESH_CHECK: true
-          V: s
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@main
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          name: daed-${{ matrix.arch }}
-          path: bin/packages/${{ matrix.arch }}/packages_ci/daed*.ipk
+          go-version: '1.22'
 
-      - name: Upload packages
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Build Tools
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev libpcap-dev:arm64 gcc-aarch64-linux-gnu
+          npm install -g pnpm
+
+      - name: Prepare Custom dae-core
+        run: |
+          rm -rf dae
+          git clone https://github.com/olicesx/dae.git dae
+          cd dae
+          git checkout optimize/code-quality-fixes
+          cd ..
+
+      - name: Build Web Frontend
+        run: |
+          cd web
+          pnpm install
+          pnpm build
+          cd ..
+
+      - name: Build dae-core & dae-wing
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -v -ldflags "-s -w" -o ./dae-bin ./dae
+          if [ -d "wing" ]; then
+            go build -v -ldflags "-s -w" -o ./dae-wing-bin ./wing
+          fi
+
+      - name: Build Final daed Binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+          CC: ${{ matrix.cc }}
+        run: |
+          VERSION=$(grep "DAED_VERSION:=" Makefile 2>/dev/null | sed 's/.*daed-//' || echo "custom")
+          go build -v -ldflags "-s -w -X main.Version=$VERSION" -o daed-${{ matrix.goarch }} .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: daed-custom-${{ matrix.goarch }}
+          path: daed-${{ matrix.goarch }}
+
+      - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          name: daed_${{ env.version }}
           allowUpdates: true
-          tag: daed_${{ env.version }}
-          commit: main
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          replacesArtifacts: true
-          artifacts: "bin/packages/${{ matrix.arch }}/packages_ci/daed*.ipk"
+          tag: daed_custom_core
+          token: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: "daed-${{ matrix.goarch }}"
