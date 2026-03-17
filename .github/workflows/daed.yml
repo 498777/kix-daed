@@ -1,4 +1,4 @@
-name: Build Binary Releases
+name: Build packages
 
 on:
   workflow_dispatch:
@@ -8,63 +8,67 @@ on:
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }} binary
+    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: aarch64
-            goarch: arm64
-          - arch: x86_64
-            goarch: amd64
+        arch:
+          - aarch64_generic    
+          - x86_64
+        sdk:
+          - openwrt-24.10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@main
         with:
           fetch-depth: 0
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22' # 根据你的项目需求调整版本
+      - name: Get node-empty
+        run: |
+          git clone https://github.com/sbwml/node-empty
 
-      - name: Init Build Dependencies
+      - name: Init build dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get -qq update
-          sudo apt-get -qq install clang llvm jq
-          # 获取版本号（保留你原有的逻辑）
-          latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1 || echo "latest")
-          echo "version=$latest_commit" >> "$GITHUB_ENV"
+          sudo swapoff -a
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install clang llvm npm
+          sudo npm install -g pnpm
+          sudo npm install -g n
+          sudo npm i taze -g
+          sudo n stable
+          latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
+          latest_wing_commit=$(grep "WING_VERSION:=wing-" daed/Makefile | sed 's/.*wing-//' | head -n 1)
+          latest_core_commit=$(grep "CORE_VERSION:=core-" daed/Makefile | sed 's/.*core-//' | head -n 1)
+          timestamp=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.author.date')
+          formatted_timestamp=$(date --date="$timestamp" "+%Y-%m-%d")
+          echo "version=$latest_commit-wing_$latest_wing_commit-core_$latest_core_commit" >> "$GITHUB_ENV"
 
-      - name: Compile Binary
-        run: |
-          # 创建存放二进制文件的目录
-          mkdir -p ./release
-          
-          # 这里假设你的源码在 daed 目录下，且使用 Go 编译
-          # 如果是 Rust 或其他语言，请修改对应的编译命令
-          cd daed
-          GOOS=linux GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o ../release/daed-linux-${{ matrix.arch }}
-          
-          # 如果有其他组件如 wing，也在此处编译
-          # GOOS=linux GOARCH=${{ matrix.goarch }} go build -o ../release/wing-linux-${{ matrix.arch }} ./wing
+      - name: Building packages
+        uses: sbwml/openwrt-gh-action-sdk@go1.26
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
+          FEEDNAME: packages_ci
+          PACKAGES: daed
+          NO_REFRESH_CHECK: true
+          V: s
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload artifacts
+        uses: actions/upload-artifact@main
         with:
-          name: binary-${{ matrix.arch }}
-          path: ./release/*
+          name: ${{ matrix.arch }}-core
+          path: bin/packages/${{ matrix.arch }}/packages_ci/*.ipk
 
-      - name: Release and Upload Binaries
+      - name: Upload packages
         uses: ncipollo/release-action@v1
         with:
-          name: daed_binaries_${{ env.version }}
+          name: daed_core_${{ env.version }}
           allowUpdates: true
-          tag: bin_${{ env.version }}
+          tag: daed_core_${{ env.version }}
           commit: main
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           replacesArtifacts: true
-          artifacts: "./release/*"
+          artifacts: "bin/packages/${{ matrix.arch }}/packages_ci/*.ipk"
