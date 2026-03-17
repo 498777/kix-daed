@@ -2,8 +2,9 @@ name: Build daed (PR-936) Binary
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "*/30 * * * *"
+  push:
+    branches:
+      - main
 
 jobs:
   build:
@@ -26,55 +27,45 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Get Version and Check Updates
-        id: version
+      - name: Get Version
+        id: meta
         run: |
-          UPSTREAM_DAED_SHA=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
-          UPSTREAM_CORE_SHA=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
-          UPSTREAM_WING_SHA=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
+          latest_commit=$(git rev-parse --short=7 HEAD)
+          latest_wing_commit=$(git -C wing rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
+          CORE_JSON=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes)
+          latest_core_commit=$(echo $CORE_JSON | jq -r '.sha' | cut -b 1-7)
           
-          TIMESTAMP=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.author.date')
-          FORMATTED_DATE=$(date --date="$TIMESTAMP" "+%Y-%m-%d")
-          
-          # 拼接原始版本命名规则
-          VERSION_STR="$FORMATTED_DATE-daed_${UPSTREAM_DAED_SHA:0:7}-wing_$UPSTREAM_WING_SHA-core_$UPSTREAM_CORE_SHA"
+          VERSION_STR="$latest_commit-wing_$latest_wing_commit-core_$latest_core_commit"
           
           echo "version=$VERSION_STR" >> "$GITHUB_ENV"
-          echo "CORE_SHA_FULL=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha')" >> "$GITHUB_ENV"
+          echo "CORE_SHA_FULL=$(echo $CORE_JSON | jq -r '.sha')" >> "$GITHUB_ENV"
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Node & Go
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.23'
           cache: true
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Replace Core with PR-936
-        run: |
-          go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@${{ env.CORE_SHA_FULL }}
-          go mod tidy
-
-      - name: Build Dashboard
-        run: |
-          npm install -g pnpm
-          cd dashboard
-          pnpm install
-          pnpm build
-          cd ..
-
-      - name: Install Toolchain
+      - name: Install Build Deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libpcap-dev
+          sudo apt-get install -y clang llvm libpcap-dev jq
           if [ "${{ matrix.goarch }}" = "arm64" ]; then
             sudo apt-get install -y gcc-aarch64-linux-gnu
           fi
+          npm install -g pnpm
 
-      - name: Build Binary
+      - name: Replace Core
+        run: |
+          cd wing
+          go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@${{ env.CORE_SHA_FULL }}
+          go mod tidy
+          cd ..
+
+      - name: Build
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
@@ -83,11 +74,7 @@ jobs:
           if [ "${{ matrix.goarch }}" = "arm64" ]; then
             export CC=aarch64-linux-gnu-gcc
           fi
-          mkdir -p release
-          go build -v \
-            -ldflags "-s -w -X github.com/daeuniverse/daed/constant.Version=${{ env.version }}" \
-            -o release/daed-${{ matrix.arch }} \
-            .
+          make VERSION=${{ env.version }} OUTPUT=daed-${{ matrix.arch }}
 
       - name: Upload packages
         uses: ncipollo/release-action@v1
@@ -98,4 +85,4 @@ jobs:
           commit: main
           token: ${{secrets.ACTIONS_DEPLOY_KEY}}
           replacesArtifacts: true
-          artifacts: "release/daed-${{ matrix.arch }}"
+          artifacts: "daed-${{ matrix.arch }}"
