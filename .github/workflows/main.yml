@@ -49,6 +49,7 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y dos2unix jq
           
+          # 获取提交日期
           date_daed=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.committer.date')
           date_wing=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.commit.committer.date')
           date_core=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.commit.committer.date')
@@ -61,15 +62,16 @@ jobs:
           short_wing=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
           short_core=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
 
+          # 更新 Makefile
           sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=$pkg_version/" ./daed/Makefile
           sed -i "s/DAED_VERSION:=.*/DAED_VERSION:=daed-$short_daed/" ./daed/Makefile
           sed -i "s/WING_VERSION:=.*/WING_VERSION:=wing-$short_wing/" ./daed/Makefile
           sed -i "s/CORE_VERSION:=.*/CORE_VERSION:=core-$short_core/" ./daed/Makefile
           sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=$full_daed/" ./daed/Makefile
 
-          # 仅修正权限和格式，不参与编译
-          chmod 755 ./daed/files/daed.init ./luci-app-daed/root/etc/init.d/luci_daed ./luci-app-daed/root/etc/hotplug.d/iface/98-daed
-          find . -type f -exec dos2unix {} + || true
+          # 仅修正 daed 目录下的文件
+          [ -f "./daed/files/daed.init" ] && chmod 755 ./daed/files/daed.init
+          find ./daed -type f -exec dos2unix {} + || true
           
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
@@ -77,7 +79,7 @@ jobs:
           git commit -m "Update DAED to $pkg_version" || exit 0
           git push origin main
 
-  # 阶段 2: 编译架构包 (仅 daed)
+  # 阶段 2: 编译架构包
   build_packages:
     needs: check_and_update
     if: |
