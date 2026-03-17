@@ -27,16 +27,34 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Get Version
+      - name: Get Version and Generate Pseudo Versions
         id: meta
         run: |
           latest_commit=$(git rev-parse --short=7 HEAD)
           latest_wing_commit=$(git -C wing rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
+          
           CORE_JSON=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes)
-          latest_core_commit=$(echo $CORE_JSON | jq -r '.sha' | cut -b 1-7)
-          VERSION_STR="$latest_commit-wing_$latest_wing_commit-core_$latest_core_commit"
+          CORE_SHA=$(echo $CORE_JSON | jq -r '.sha')
+          CORE_TIME=$(echo $CORE_JSON | jq -r '.commit.committer.date' | tr -d 'TZ:-')
+          CORE_PSEUDO="v0.0.0-$CORE_TIME-$(echo $CORE_SHA | cut -b 1-12)"
+          
+          OB_JSON=$(curl -s https://api.github.com/repos/olicesx/outbound/commits/optimize/code-quality-fixes)
+          if [ "$(echo $OB_JSON | jq -r '.sha')" == "null" ]; then
+            OB_JSON=$(curl -s https://api.github.com/repos/daeuniverse/outbound/commits/main)
+            OB_REPO="github.com/daeuniverse/outbound"
+          else
+            OB_REPO="github.com/olicesx/outbound"
+          fi
+          OB_SHA=$(echo $OB_JSON | jq -r '.sha')
+          OB_TIME=$(echo $OB_JSON | jq -r '.commit.committer.date' | tr -d 'TZ:-')
+          OB_PSEUDO="v0.0.0-$OB_TIME-$(echo $OB_SHA | cut -b 1-12)"
+          
+          VERSION_STR="$latest_commit-wing_$latest_wing_commit-core_$(echo $CORE_SHA | cut -b 1-7)"
+          
           echo "version=$VERSION_STR" >> "$GITHUB_ENV"
-          echo "CORE_SHA_FULL=$(echo $CORE_JSON | jq -r '.sha')" >> "$GITHUB_ENV"
+          echo "CORE_PSEUDO=$CORE_PSEUDO" >> "$GITHUB_ENV"
+          echo "OB_REPO=$OB_REPO" >> "$GITHUB_ENV"
+          echo "OB_PSEUDO=$OB_PSEUDO" >> "$GITHUB_ENV"
 
       - name: Setup Node & Go
         uses: actions/setup-node@v4
@@ -44,7 +62,7 @@ jobs:
           node-version: 20
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.24'
           cache: true
 
       - name: Install Build Deps
@@ -59,21 +77,9 @@ jobs:
       - name: Replace Core and Dependencies
         run: |
           cd wing
-          go get github.com/olicesx/dae@${{ env.CORE_SHA_FULL }}
-          CORE_PSEUDO_VERSION=$(go list -m github.com/olicesx/dae | awk '{print $2}')
-          go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@$CORE_PSEUDO_VERSION
-
-          OLICESX_OUTBOUND_SHA=$(curl -s https://api.github.com/repos/olicesx/outbound/commits/optimize/code-quality-fixes | jq -r '.sha')
-          if [ "$OLICESX_OUTBOUND_SHA" == "null" ] || [ -z "$OLICESX_OUTBOUND_SHA" ]; then
-            go get github.com/daeuniverse/outbound@main
-            OB_VER=$(go list -m github.com/daeuniverse/outbound | awk '{print $2}')
-            go mod edit -replace github.com/daeuniverse/outbound=github.com/daeuniverse/outbound@$OB_VER
-          else
-            go get github.com/olicesx/outbound@$OLICESX_OUTBOUND_SHA
-            OB_VER=$(go list -m github.com/olicesx/outbound | awk '{print $2}')
-            go mod edit -replace github.com/daeuniverse/outbound=github.com/olicesx/outbound@$OB_VER
-          fi
-
+          export GOTOOLCHAIN=auto
+          go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@${{ env.CORE_PSEUDO }}
+          go mod edit -replace github.com/daeuniverse/outbound=${{ env.OB_REPO }}@${{ env.OB_PSEUDO }}
           go mod tidy
           cd ..
 
@@ -82,6 +88,7 @@ jobs:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
+          GOTOOLCHAIN: auto
         run: |
           if [ "${{ matrix.goarch }}" = "arm64" ]; then
             export CC=aarch64-linux-gnu-gcc
