@@ -59,18 +59,21 @@ jobs:
       - name: Replace Core and Dependencies
         run: |
           cd wing
-          go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae
-          
+          go get github.com/olicesx/dae@${{ env.CORE_SHA_FULL }}
+          CORE_PSEUDO_VERSION=$(go list -m github.com/olicesx/dae | awk '{print $2}')
+          go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@$CORE_PSEUDO_VERSION
+
           OLICESX_OUTBOUND_SHA=$(curl -s https://api.github.com/repos/olicesx/outbound/commits/optimize/code-quality-fixes | jq -r '.sha')
           if [ "$OLICESX_OUTBOUND_SHA" == "null" ] || [ -z "$OLICESX_OUTBOUND_SHA" ]; then
-            go mod edit -replace github.com/daeuniverse/outbound=github.com/daeuniverse/outbound
             go get github.com/daeuniverse/outbound@main
+            OB_VER=$(go list -m github.com/daeuniverse/outbound | awk '{print $2}')
+            go mod edit -replace github.com/daeuniverse/outbound=github.com/daeuniverse/outbound@$OB_VER
           else
-            go mod edit -replace github.com/daeuniverse/outbound=github.com/olicesx/outbound
             go get github.com/olicesx/outbound@$OLICESX_OUTBOUND_SHA
+            OB_VER=$(go list -m github.com/olicesx/outbound | awk '{print $2}')
+            go mod edit -replace github.com/daeuniverse/outbound=github.com/olicesx/outbound@$OB_VER
           fi
 
-          go get github.com/olicesx/dae@${{ env.CORE_SHA_FULL }}
           go mod tidy
           cd ..
 
