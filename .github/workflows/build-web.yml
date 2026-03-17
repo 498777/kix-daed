@@ -108,8 +108,8 @@ jobs:
         if: steps.check.outputs.update_needed == 'true'
         run: |
           rm -rf build
-          git config --global user.email simonsqiu@foxmail.com
-          git config --global user.name SimonsQiu
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
           git add .
           git commit -m "Update `date +%Y/%m/%d\ %H:%M:%S\ %Z`" -a
         continue-on-error: true
@@ -119,7 +119,7 @@ jobs:
         uses: ad-m/github-push-action@master
         with:
           github_token: ${{secrets.ACTIONS_DEPLOY_KEY}}
-          branch: kix
+          branch: main
         continue-on-error: true
 
       - name: Delete Older Releases
