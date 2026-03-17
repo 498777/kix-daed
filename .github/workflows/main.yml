@@ -1,0 +1,152 @@
+name: Auto Sync & Build Packages
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 * * * *" 
+
+jobs:
+  check_and_update:
+    name: Check Updates & Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      update_needed: ${{ steps.check.outputs.update_needed }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          fetch-depth: 0
+
+      - name: Check Upstream Updates
+        id: check
+        run: |
+          UPSTREAM_DAED=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
+          CURRENT_DAED=$(grep "PKG_SOURCE_VERSION:=" daed/Makefile | cut -d= -f2 || echo "")
+          
+          NEED_UPDATE=false
+          if [ "$UPSTREAM_DAED" != "$CURRENT_DAED" ]; then NEED_UPDATE=true; fi
+          
+          if [ "$NEED_UPDATE" = "true" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "update_needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "update_needed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update Makefile & Commit
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          sudo apt-get install -y dos2unix
+          DATE_ISO=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.committer.date')
+          PKG_VER=$(date -d "$DATE_ISO" +%Y.%m.%d)
+          FULL_SHA=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
+          SHORT_SHA=$(echo $FULL_SHA | cut -b 1-7)
+          WING_SHA=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
+          CORE_SHA=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
+
+          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$PKG_VER/" ./daed/Makefile
+          sed -i "s/^DAED_VERSION:=.*/DAED_VERSION:=daed-$SHORT_SHA/" ./daed/Makefile
+          sed -i "s/^WING_VERSION:=.*/WING_VERSION:=wing-$WING_SHA/" ./daed/Makefile
+          sed -i "s/^CORE_VERSION:=.*/CORE_VERSION:=core-$CORE_SHA/" ./daed/Makefile
+          sed -i "s/^PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=$FULL_SHA/" ./daed/Makefile
+
+          find . -type f -name "*.init" -exec dos2unix {} \;
+          
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git add .
+          git commit -m "Auto Update: $PKG_VER-$SHORT_SHA" || exit 0
+          git push origin main
+
+  build:
+    name: Build ${{ matrix.goarch }}
+    needs: check_and_update
+    if: needs.check_and_update.outputs.update_needed == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include:
+          - goarch: amd64
+            goos: linux
+            cc: gcc
+          - goarch: arm64
+            goos: linux
+            cc: aarch64-linux-gnu-gcc
+    steps:
+      - name: Checkout updated code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          submodules: recursive
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+
+      - name: Setup Build Env
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev libpcap-dev:arm64 gcc-aarch64-linux-gnu
+          npm install -g pnpm
+
+      - name: Prepare Custom Core
+        run: |
+          rm -rf dae
+          git clone https://x-access-token:${{ secrets.ACTIONS_DEPLOY_KEY }}@github.com/olicesx/dae.git dae
+          cd dae && git checkout optimize/code-quality-fixes && cd ..
+
+      - name: Build & Checksum
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CC: ${{ matrix.cc }}
+          CGO_ENABLED: 1
+        run: |
+          # 编译 Web 前端
+          cd web && pnpm install && pnpm build && cd ..
+          # 编译 Core 和 Wing
+          CGO_ENABLED=0 go build -v -ldflags "-s -w" -o dae-bin ./dae
+          if [ -d "wing" ]; then CGO_ENABLED=0 go build -v -ldflags "-s -w" -o dae-wing-bin ./wing; fi
+          # 编译主程序
+          VERSION=$(grep "DAED_VERSION:=" daed/Makefile | sed 's/.*daed-//' || echo "custom")
+          BINARY_NAME="daed-${{ matrix.goarch }}"
+          go build -v -ldflags "-s -w -X main.Version=$VERSION" -o $BINARY_NAME .
+          # 生成校验和
+          sha256sum $BINARY_NAME > ${BINARY_NAME}.sha256
+
+      - name: Release Artifacts
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          tag: daed_custom_core
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          artifacts: "daed-${{ matrix.goarch }},daed-${{ matrix.goarch }}.sha256"
+          replacesArtifacts: false
+
+  cleanup:
+    name: Cleanup Old Data
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete Older Releases
+        uses: dev-drprasad/delete-older-releases@v0.3.0
+        with:
+          keep_latest: 3
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+
+      - name: Cleanup Workflow Logs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          repository: ${{ github.repository }}
+          retain_days: 3
