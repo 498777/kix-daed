@@ -1,106 +1,143 @@
-name: Build daed Binary (Direct Fix)
+name: Build and Release DAED
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "*/30 * * * *"
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'daed/Makefile'
 
 jobs:
-  build:
-    name: Build ${{ matrix.arch }}
+  # 阶段 1: 检查更新并同步 Makefile
+  check_and_update:
     runs-on: ubuntu-latest
+    outputs:
+      update_needed: ${{ steps.check.outputs.update_needed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+
+      - name: Check Upstream Updates
+        id: check
+        run: |
+          UPSTREAM_DAED=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
+          UPSTREAM_WING=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
+          UPSTREAM_CORE=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
+
+          CURRENT_DAED=$(grep "PKG_SOURCE_VERSION:=" daed/Makefile | cut -d= -f2)
+          CURRENT_WING=$(grep "WING_VERSION:=wing-" daed/Makefile | sed 's/.*wing-//' | head -n 1)
+          CURRENT_CORE=$(grep "CORE_VERSION:=core-" daed/Makefile | sed 's/.*core-//' | head -n 1)
+
+          NEED_UPDATE=false
+          if [ "$UPSTREAM_DAED" != "$CURRENT_DAED" ] || [ "$UPSTREAM_WING" != "$CURRENT_WING" ] || [ "$UPSTREAM_CORE" != "$CURRENT_CORE" ]; then 
+            NEED_UPDATE=true
+          fi
+
+          if [ "$NEED_UPDATE" = "true" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "update_needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "update_needed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update Makefile and Commit
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          sudo apt-get update && sudo apt-get install -y dos2unix jq
+          
+          date_daed=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.committer.date')
+          date_wing=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.commit.committer.date')
+          date_core=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.commit.committer.date')
+          
+          latest_iso_date=$(echo -e "$date_daed\n$date_wing\n$date_core" | sort -r | head -n 1)
+          pkg_version=$(date -d "$latest_iso_date" +%Y.%m.%d)
+          
+          full_daed=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha')
+          short_daed=$(echo $full_daed | cut -b 1-7)
+          short_wing=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r '.sha' | cut -b 1-7)
+          short_core=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)
+
+          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=$pkg_version/" ./daed/Makefile
+          sed -i "s/DAED_VERSION:=.*/DAED_VERSION:=daed-$short_daed/" ./daed/Makefile
+          sed -i "s/WING_VERSION:=.*/WING_VERSION:=wing-$short_wing/" ./daed/Makefile
+          sed -i "s/CORE_VERSION:=.*/CORE_VERSION:=core-$short_core/" ./daed/Makefile
+          sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=$full_daed/" ./daed/Makefile
+
+          chmod 755 ./daed/files/daed.init ./luci-app-daed/root/etc/init.d/luci_daed ./luci-app-daed/root/etc/hotplug.d/iface/98-daed
+          find . -type f -exec dos2unix {} + || true
+          
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git add .
+          git commit -m "Update DAED to $pkg_version" || exit 0
+          git push origin main
+
+  # 阶段 2: 编译架构包
+  build_packages:
+    needs: check_and_update
+    if: |
+      always() && 
+      (needs.check_and_update.outputs.update_needed == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    name: Build ${{ matrix.arch }}
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: x86_64
-            goarch: amd64
-          - arch: arm64
-            goarch: arm64
-
+        arch: [aarch64_generic, x86_64]
+        sdk: [openwrt-24.10]
     steps:
-      - name: Checkout Local Repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: main
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
 
-      - name: Setup Build Environment
+      - name: Prepare Env
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-15 llvm-15 libbpf-dev jq dos2unix
-          sudo ln -s /usr/bin/clang-15 /usr/bin/clang
-          npm install -g pnpm
+          sudo apt-get update && sudo apt-get install -y clang llvm
+          DAED_V=$(grep "DAED_VERSION:=" daed/Makefile | cut -d- -f2)
+          WING_V=$(grep "WING_VERSION:=" daed/Makefile | cut -d- -f2)
+          CORE_V=$(grep "CORE_VERSION:=" daed/Makefile | cut -d- -f2)
+          echo "VERSION_TAG=${DAED_V}-wing_${WING_V}-core_${CORE_V}" >> $GITHUB_ENV
 
-      - name: Clone & Patch Core (PR936)
-        run: |
-          # 1. 克隆 daed 源码
-          git clone --recursive https://github.com/daeuniverse/daed.git source
-          
-          # 2. 克隆 dae 核心并拉取 PR936
-          git clone https://github.com/daeuniverse/dae.git dae-core
-          cd dae-core
-          git fetch origin pull/936/head:pr936
-          git config user.email "bot@me.com"
-          git config user.name "BuildBot"
-          git merge pr936 --no-edit
-          echo "CORE_PATH=$(pwd)" >> $GITHUB_ENV
-
-      - name: Build Web Frontend (Fixed)
-        run: |
-          cd source
-          # 强制忽略 dae-lsp 的构建警告错误
-          pnpm install
-          # 使用 || true 确保即使构建脚本返回 1，只要 dist 出来了就不停止
-          pnpm build || true
-          
-          # 验证前端产物
-          if [ ! -d "apps/web/dist" ] || [ ! -f "apps/web/dist/index.html" ]; then
-            echo "Critical Error: Web dist not generated!"
-            exit 1
-          fi
-
-      - name: Setup Go & Build Backend
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: Compile & Bundle
+      - name: Building packages
+        uses: sbwml/openwrt-gh-action-sdk@go1.26
         env:
-          GOOS: linux
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
-        run: |
-          cd source/wing
-          # 注入 PR936 核心代码
-          go mod edit -replace github.com/daeuniverse/dae=${{ env.CORE_PATH }}
-          go mod tidy
-          
-          # 编译并将 web 嵌入
-          make APPNAME=daed WEB_DIST=../apps/web/dist bundle
-          mv daed ../../daed-${{ matrix.arch }}
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
+          FEEDNAME: packages_ci
+          PACKAGES: luci-app-daed
+          NO_REFRESH_CHECK: true
+          V: s
 
-      - name: Verify Binary
-        run: |
-          SIZE=$(stat -c%s "daed-${{ matrix.arch }}")
-          echo "Binary size: $SIZE bytes"
-          if [ $SIZE -lt 10000000 ]; then
-            echo "Error: Binary too small, assets missing!"
-            exit 1
-          fi
-          # 检查是否包含 index.html 标志字符串
-          strings daed-${{ matrix.arch }} | grep -E "index.html|assets/" | head -n 5
-
-      - name: Create Release
+      - name: Upload to Release
         uses: ncipollo/release-action@v1
         with:
-          name: daed-direct-build
-          tag: daed-${{ github.sha }}
+          name: daed_${{ env.VERSION_TAG }}
+          tag: daed_${{ env.VERSION_TAG }}
           allowUpdates: true
           replacesArtifacts: true
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          artifacts: "daed-${{ matrix.arch }}"
-          body: |
-            Standalone daed Binary (Direct Compiled)
-            - Architecture: ${{ matrix.arch }}
-            - Includes Core PR#936
-            - Integrated Web Frontend
+          artifacts: "bin/packages/${{ matrix.arch }}/packages_ci/*.ipk"
+
+  # 阶段 3: 清理
+  cleanup:
+    needs: build_packages
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete Older Releases
+        uses: dev-drprasad/delete-older-releases@master
+        with:
+          keep_latest: 3
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+
+      - name: Cleanup Workflow Logs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          retain_days: 3
