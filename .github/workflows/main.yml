@@ -58,10 +58,11 @@ jobs:
           fi
           npm install -g pnpm
 
-      - name: Replace Core
+      - name: Replace Core and Update Dependencies
         run: |
           cd wing
           go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@${{ env.CORE_SHA_FULL }}
+          go get github.com/daeuniverse/outbound@main
           go mod tidy
           cd ..
 
