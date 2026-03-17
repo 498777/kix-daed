@@ -34,9 +34,7 @@ jobs:
           latest_wing_commit=$(git -C wing rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
           CORE_JSON=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes)
           latest_core_commit=$(echo $CORE_JSON | jq -r '.sha' | cut -b 1-7)
-          
           VERSION_STR="$latest_commit-wing_$latest_wing_commit-core_$latest_core_commit"
-          
           echo "version=$VERSION_STR" >> "$GITHUB_ENV"
           echo "CORE_SHA_FULL=$(echo $CORE_JSON | jq -r '.sha')" >> "$GITHUB_ENV"
 
@@ -58,11 +56,17 @@ jobs:
           fi
           npm install -g pnpm
 
-      - name: Replace Core and Update Dependencies
+      - name: Replace Core and Dependencies
         run: |
           cd wing
           go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@${{ env.CORE_SHA_FULL }}
-          go get github.com/daeuniverse/outbound@main
+          OLICESX_OUTBOUND_SHA=$(curl -s https://api.github.com/repos/olicesx/outbound/commits/optimize/code-quality-fixes | jq -r '.sha')
+          if [ "$OLICESX_OUTBOUND_SHA" == "null" ] || [ -z "$OLICESX_OUTBOUND_SHA" ]; then
+            DAE_OUTBOUND_SHA=$(curl -s https://api.github.com/repos/daeuniverse/outbound/commits/main | jq -r '.sha')
+            go mod edit -replace github.com/daeuniverse/outbound=github.com/daeuniverse/outbound@$DAE_OUTBOUND_SHA
+          else
+            go mod edit -replace github.com/daeuniverse/outbound=github.com/olicesx/outbound@$OLICESX_OUTBOUND_SHA
+          fi
           go mod tidy
           cd ..
 
