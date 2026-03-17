@@ -1,96 +1,148 @@
 name: Build packages
+name: Build packages
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
   build:
-    name: Build ${{ matrix.goarch }}
+    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - goarch: amd64
-            goos: linux
-            cc: gcc
-          - goarch: arm64
-            goos: linux
-            cc: aarch64-linux-gnu-gcc
+        arch:
+          - aarch64_generic    
+          - i386_pentium4
+          - x86_64
+        sdk:
+          - openwrt-24.10
 
     steps:
-      - name: Checkout daed
-        uses: actions/checkout@v4
+      - uses: actions/checkout@main
         with:
-          repository: daeuniverse/daed
-          submodules: recursive
           fetch-depth: 0
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install Build Tools
+      - name: Get node-empty
         run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y libpcap-dev libpcap-dev:arm64 gcc-aarch64-linux-gnu
-          npm install -g pnpm
+          git clone https://github.com/sbwml/node-empty
 
-      - name: Prepare Custom dae-core
-        run: |
-          rm -rf dae
-          git clone https://github.com/olicesx/dae.git dae
-          cd dae
-          git checkout optimize/code-quality-fixes
-          cd ..
-
-      - name: Build Web Frontend
-        run: |
-          cd web
-          pnpm install
-          pnpm build
-          cd ..
-
-      - name: Build dae-core & dae-wing
+      - name: Init build dependencies
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          go build -v -ldflags "-s -w" -o ./dae-bin ./dae
-          if [ -d "wing" ]; then
-            go build -v -ldflags "-s -w" -o ./dae-wing-bin ./wing
-          fi
+          sudo swapoff -a
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install clang llvm npm
+          sudo npm install -g pnpm
+          sudo npm install -g n
+          sudo npm i taze -g
+          sudo n stable
+          latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
+          latest_wing_commit=$(grep "WING_VERSION:=wing-" daed/Makefile | sed 's/.*wing-//' | head -n 1)
+          latest_core_commit=$(grep "CORE_VERSION:=core-" daed/Makefile | sed 's/.*core-//' | head -n 1)
+          timestamp=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.author.date')
+          formatted_timestamp=$(date --date="$timestamp" "+%Y-%m-%d")
+          echo "version=$latest_commit-wing_$latest_wing_commit-core_$latest_core_commit" >> "$GITHUB_ENV"
 
-      - name: Build Final daed Binary
+      - name: Building packages
+        uses: sbwml/openwrt-gh-action-sdk@go1.26
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
-          CC: ${{ matrix.cc }}
-        run: |
-          VERSION=$(grep "DAED_VERSION:=" Makefile 2>/dev/null | sed 's/.*daed-//' || echo "custom")
-          go build -v -ldflags "-s -w -X main.Version=$VERSION" -o daed-${{ matrix.goarch }} .
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
+          FEEDNAME: packages_ci
+          PACKAGES: luci-app-daed
+          NO_REFRESH_CHECK: true
+          V: s
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload artifacts
+        uses: actions/upload-artifact@main
         with:
-          name: daed-custom-${{ matrix.goarch }}
-          path: daed-${{ matrix.goarch }}
+          name: ${{ matrix.arch }}
+          path: bin/packages/${{ matrix.arch }}/packages_ci/*.ipk
 
-      - name: Create Release
+      - name: Upload packages
         uses: ncipollo/release-action@v1
         with:
+          name: daed_${{ env.version }}
           allowUpdates: true
-          tag: daed_custom_core
-          token: ${{ secrets.GITHUB_TOKEN }}
-          artifacts: "daed-${{ matrix.goarch }}"
+          tag: daed_${{ env.version }}
+          commit: main
+          token: ${{secrets.ACTIONS_DEPLOY_KEY}}
+          replacesArtifacts: true
+          artifacts: "bin/packages/${{ matrix.arch }}/packages_ci/*.ipk"
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - aarch64_generic    
+          - x86_64
+        sdk:
+          - openwrt-24.10
+
+    steps:
+      - uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+
+      - name: Get node-empty
+        run: |
+          git clone https://github.com/sbwml/node-empty
+
+      - name: Init build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo swapoff -a
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install clang llvm npm
+          sudo npm install -g pnpm
+          sudo npm install -g n
+          sudo npm i taze -g
+          sudo n stable
+          latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
+          latest_wing_commit=$(grep "WING_VERSION:=wing-" daed/Makefile | sed 's/.*wing-//' | head -n 1)
+          latest_core_commit=$(grep "CORE_VERSION:=core-" daed/Makefile | sed 's/.*core-//' | head -n 1)
+          timestamp=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.author.date')
+          formatted_timestamp=$(date --date="$timestamp" "+%Y-%m-%d")
+          echo "version=$latest_commit-wing_$latest_wing_commit-core_$latest_core_commit" >> "$GITHUB_ENV"
+
+      - name: Building packages
+        uses: sbwml/openwrt-gh-action-sdk@go1.26
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
+          FEEDNAME: packages_ci
+          PACKAGES: luci-app-daed
+          NO_REFRESH_CHECK: true
+          V: s
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@main
+        with:
+          name: ${{ matrix.arch }}
+          path: bin/packages/${{ matrix.arch }}/packages_ci/*.ipk
+
+      - name: Upload packages
+        uses: ncipollo/release-action@v1
+        with:
+          name: daed_${{ env.version }}
+          allowUpdates: true
+          tag: daed_${{ env.version }}
+          commit: main
+          token: ${{secrets.ACTIONS_DEPLOY_KEY}}
+          replacesArtifacts: true
+          artifacts: "bin/packages/${{ matrix.arch }}/packages_ci/*.ipk"
