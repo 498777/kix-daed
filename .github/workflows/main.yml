@@ -59,14 +59,18 @@ jobs:
       - name: Replace Core and Dependencies
         run: |
           cd wing
-          go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@${{ env.CORE_SHA_FULL }}
+          go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae
+          
           OLICESX_OUTBOUND_SHA=$(curl -s https://api.github.com/repos/olicesx/outbound/commits/optimize/code-quality-fixes | jq -r '.sha')
           if [ "$OLICESX_OUTBOUND_SHA" == "null" ] || [ -z "$OLICESX_OUTBOUND_SHA" ]; then
-            DAE_OUTBOUND_SHA=$(curl -s https://api.github.com/repos/daeuniverse/outbound/commits/main | jq -r '.sha')
-            go mod edit -replace github.com/daeuniverse/outbound=github.com/daeuniverse/outbound@$DAE_OUTBOUND_SHA
+            go mod edit -replace github.com/daeuniverse/outbound=github.com/daeuniverse/outbound
+            go get github.com/daeuniverse/outbound@main
           else
-            go mod edit -replace github.com/daeuniverse/outbound=github.com/olicesx/outbound@$OLICESX_OUTBOUND_SHA
+            go mod edit -replace github.com/daeuniverse/outbound=github.com/olicesx/outbound
+            go get github.com/olicesx/outbound@$OLICESX_OUTBOUND_SHA
           fi
+
+          go get github.com/olicesx/dae@${{ env.CORE_SHA_FULL }}
           go mod tidy
           cd ..
 
