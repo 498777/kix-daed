@@ -14,8 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         arch:
-          - aarch64_generic    
-          - i386_pentium4
+          - aarch64_generic
           - x86_64
         sdk:
           - openwrt-24.10
