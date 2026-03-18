@@ -109,8 +109,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
 
-      - name: Cleanup Runs
+      - name: Cleanup All Workflow Runs
         env:
           GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
         run: |
-          gh run delete --workflow "Build and Release daed" --created "<$(date -d '3 days ago' +%Y-%m-%d)" --confirm || true
+          CUTOFF_DATE=$(date -d '3 days ago' +%Y-%m-%d)
+          for workflow in $(gh workflow list --json id -q '.[].id'); do
+            gh run delete --workflow "$workflow" --created "<$CUTOFF_DATE" --confirm || true
+          done
