@@ -2,7 +2,7 @@ name: Build and Release daed
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '0/30 * * * *'
   workflow_dispatch:
 
 concurrency:
@@ -24,9 +24,7 @@ jobs:
           FULL_SHA=$(git ls-remote https://github.com/olicesx/dae.git optimize/code-quality-fixes | awk '{print $1}')
           SHORT_SHA=${FULL_SHA:0:7}
           echo "patch_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
-          
-          TAG_NAME="kix-daed_$SHORT_SHA"
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+          if gh release view "kix-daed_$SHORT_SHA" >/dev/null 2>&1; then
             echo "should_build=false" >> $GITHUB_OUTPUT
           else
             echo "should_build=true" >> $GITHUB_OUTPUT
@@ -36,6 +34,7 @@ jobs:
     needs: check
     if: needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       matrix:
         include:
@@ -62,7 +61,6 @@ jobs:
         uses: pnpm/action-setup@v3
         with:
           version: 9
-          run_install: false
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -73,7 +71,7 @@ jobs:
       - name: Install System Deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libpcap-dev ${{ matrix.gcc_pkg }}
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential libpcap-dev ${{ matrix.gcc_pkg }}
 
       - name: Build Web
         run: |
@@ -95,14 +93,9 @@ jobs:
           git remote add patch_repo https://github.com/olicesx/dae.git || true
           git fetch patch_repo optimize/code-quality-fixes
           git checkout $PATCH_SHA
-          
           go mod tidy
-          [ -f Makefile ] && (make deps || true)
-          
+          [ -f Makefile ] && make deps || true
           go build -v -trimpath -tags webdist -ldflags "-s -w -X github.com/daeuniverse/daed/wing/internal/version.Version=$PATCH_SHA" -o ${{ github.workspace }}/daed-${{ matrix.arch_name }} ./main.go
-          
-          cd ${{ github.workspace }}
-          ls -lh daed-${{ matrix.arch_name }}
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -137,7 +130,6 @@ jobs:
           GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
         run: |
           gh release list --limit 100 | grep "kix-daed_" | tail -n +4 | awk '{print $1}' | xargs -I {} gh release delete {} --yes --cleanup-tag || true
-          
           CUTOFF=$(date -d '3 days ago' -u +%Y-%m-%dT%H:%M:%SZ)
           RUNS=$(gh run list --limit 100 --json databaseId,createdAt -q ".[] | select(.createdAt < \"$CUTOFF\") | .databaseId")
           for run_id in $RUNS; do
