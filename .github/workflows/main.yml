@@ -34,7 +34,7 @@ jobs:
       - name: Setup Node & Go
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23'
@@ -50,12 +50,19 @@ jobs:
           git clone https://github.com/olicesx/dae.git ./core-src && cd ./core-src && git checkout $CORE_SHA && cd ..
 
       - name: Build Frontend
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
         run: |
           cd ./daed-src
           npm install -g pnpm
-          pnpm install && pnpm build
+          pnpm install
+          pnpm build
           mkdir -p ../dist
-          [ -d "apps/web/dist" ] && cp -r apps/web/dist/* ../dist/ || cp -r dist/* ../dist/
+          if [ -d "apps/web/dist" ]; then
+            cp -r apps/web/dist/* ../dist/
+          else
+            cp -r dist/* ../dist/
+          fi
 
       - name: Build eBPF
         run: |
@@ -68,13 +75,16 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
         run: |
-          [ "${{ matrix.goarch }}" = "arm64" ] && export CC=aarch64-linux-gnu-gcc
+          if [ "${{ matrix.goarch }}" = "arm64" ]; then export CC=aarch64-linux-gnu-gcc; fi
+          
           cd ./wing-src
           mkdir -p webrender/web
           cp -r ../dist/* webrender/web/
           find webrender/web -type f -size +4k ! -name "*.gz" -exec gzip -9 -k {} \;
+          
           ln -s ../core-src dae-core
           go generate ./...
+          
           go build -tags=embedallowed -trimpath \
             -ldflags="-s -w -X github.com/daeuniverse/dae-wing/db.AppVersion=$(date +%Y%m%d)" \
             -o ../daed-${{ matrix.arch_name }} .
