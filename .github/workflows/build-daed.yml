@@ -45,18 +45,16 @@ jobs:
             arch_name: aarch64
             gcc_pkg: gcc-aarch64-linux-gnu
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          submodules: recursive
-          fetch-depth: 0
+      - name: Clone Source
+        run: |
+          git clone --depth 1 https://github.com/daeuniverse/daed.git source-daed
+          git clone --branch optimize/code-quality-fixes --depth 1 https://github.com/olicesx/dae.git source-patch
 
-      - name: Setup Node
+      - name: Setup Environment
         uses: actions/setup-node@v4
         with:
           node-version: 20
-
+      
       - name: Setup PNPM
         uses: pnpm/action-setup@v3
         with:
@@ -68,20 +66,21 @@ jobs:
           go-version: '1.22'
           cache: true
 
-      - name: Install System Deps
+      - name: Install Deps
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential libpcap-dev ${{ matrix.gcc_pkg }}
 
       - name: Build Web
         run: |
-          cd apps/web
+          cd source-daed/apps/web
           pnpm install
           pnpm build
-          mkdir -p ../../dist_web
-          cp -r dist/* ../../dist_web/
+          # 将静态资源移动到 Go 编译能识别的 wing 资源目录
+          mkdir -p ../../wing/internal/webdist/dist
+          cp -r dist/* ../../wing/internal/webdist/dist/
 
-      - name: Patch & Build Wing
+      - name: Build Binary
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
@@ -89,15 +88,15 @@ jobs:
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
           PATCH_SHA: ${{ needs.check.outputs.patch_sha }}
         run: |
-          cd wing
-          git remote add patch_repo https://github.com/olicesx/dae.git || true
-          git fetch patch_repo optimize/code-quality-fixes
-          git checkout $PATCH_SHA
+          # 进入包含 wing 逻辑的主目录进行编译
+          cd source-daed
           go mod tidy
-          [ -f Makefile ] && make deps || true
-          go build -v -trimpath -tags webdist -ldflags "-s -w -X github.com/daeuniverse/daed/wing/internal/version.Version=$PATCH_SHA" -o ../daed-${{ matrix.arch_name }} ./main.go
+          # 使用 webdist 标签将刚才复制的静态资源嵌入二进制
+          go build -v -trimpath -tags webdist \
+            -ldflags "-s -w -X github.com/daeuniverse/daed/wing/internal/version.Version=$PATCH_SHA" \
+            -o ${{ github.workspace }}/daed-${{ matrix.arch_name }} ./wing/main.go
 
-      - name: Upload Artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.arch_name }}
@@ -107,12 +106,11 @@ jobs:
     needs: [check, build]
     runs-on: ubuntu-latest
     steps:
-      - name: Download Artifacts
+      - name: Download
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
-
-      - name: Create Release
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
@@ -125,7 +123,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Cleanup All
+      - name: Cleanup
         env:
           GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           REPO: ${{ github.repository }}
