@@ -35,6 +35,11 @@ jobs:
           latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
           echo "version=$latest_commit" >> "$GITHUB_ENV"
 
+      - name: Patch Makefile before Build
+        run: |
+          sed -i 's/PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=skip/' daed/Makefile
+          sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/' daed/Makefile
+
       - name: Building daed only
         uses: sbwml/openwrt-gh-action-sdk@go1.26
         env:
