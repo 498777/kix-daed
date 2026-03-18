@@ -54,11 +54,21 @@ jobs:
 
       - name: Patch dae-core
         run: |
-          cd wing
-          git remote add patch_repo https://github.com/olicesx/dae.git || true
-          git fetch patch_repo optimize/code-quality-fixes
-          git checkout patch_repo/optimize/code-quality-fixes
-          cd ..
+          if [ -d "wing" ]; then
+            TARGET_DIR="wing"
+          elif [ -d "backend" ]; then
+            TARGET_DIR="backend"
+          else
+            TARGET_DIR="."
+          fi
+          
+          cd "$TARGET_DIR"
+          if [ -f "go.mod" ]; then
+            git remote add patch_repo https://github.com/olicesx/dae.git || true
+            git fetch patch_repo optimize/code-quality-fixes
+            git checkout patch_repo/optimize/code-quality-fixes
+          fi
+          cd ${{ github.workspace }}
 
       - name: Build Web
         run: make dist
@@ -113,7 +123,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
         run: |
-          CUTOFF_DATE=$(date -d '1 days ago' +%Y-%m-%d)
+          CUTOFF_DATE=$(date -d '3 days ago' +%Y-%m-%d)
           for workflow in $(gh workflow list --json id -q '.[].id'); do
             gh run delete --workflow "$workflow" --created "<$CUTOFF_DATE" --confirm || true
           done
