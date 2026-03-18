@@ -1,4 +1,4 @@
-name: Build daed (PR-936) Binary
+name: Build daed binary
 
 on:
   workflow_dispatch:
@@ -8,100 +8,67 @@ on:
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }}
+    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - goarch: amd64
-            arch: x86_64
-          - goarch: arm64
-            arch: aarch64_generic
+        arch:
+          - aarch64_generic    
+          - x86_64
+        sdk:
+          - openwrt-24.10
 
     steps:
-      - name: Checkout daed
-        uses: actions/checkout@v4
+      - uses: actions/checkout@main
         with:
-          repository: daeuniverse/daed
           fetch-depth: 0
-          submodules: recursive
 
-      - name: Get Version and Generate Pseudo Versions
-        id: meta
-        run: |
-          latest_commit=$(git rev-parse --short=7 HEAD)
-          latest_wing_commit=$(git -C wing rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
-          
-          CORE_JSON=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes)
-          CORE_SHA=$(echo $CORE_JSON | jq -r '.sha')
-          CORE_TIME=$(echo $CORE_JSON | jq -r '.commit.committer.date' | tr -d 'TZ:-')
-          CORE_PSEUDO="v0.0.0-$CORE_TIME-$(echo $CORE_SHA | cut -b 1-12)"
-          
-          OB_JSON=$(curl -s https://api.github.com/repos/olicesx/outbound/commits/optimize/code-quality-fixes)
-          if [ "$(echo $OB_JSON | jq -r '.sha')" == "null" ]; then
-            OB_JSON=$(curl -s https://api.github.com/repos/daeuniverse/outbound/commits/main)
-            OB_REPO="github.com/daeuniverse/outbound"
-          else
-            OB_REPO="github.com/olicesx/outbound"
-          fi
-          OB_SHA=$(echo $OB_JSON | jq -r '.sha')
-          OB_TIME=$(echo $OB_JSON | jq -r '.commit.committer.date' | tr -d 'TZ:-')
-          OB_PSEUDO="v0.0.0-$OB_TIME-$(echo $OB_SHA | cut -b 1-12)"
-          
-          VERSION_STR="$latest_commit-wing_$latest_wing_commit-core_$(echo $CORE_SHA | cut -b 1-7)"
-          
-          echo "version=$VERSION_STR" >> "$GITHUB_ENV"
-          echo "CORE_PSEUDO=$CORE_PSEUDO" >> "$GITHUB_ENV"
-          echo "OB_REPO=$OB_REPO" >> "$GITHUB_ENV"
-          echo "OB_PSEUDO=$OB_PSEUDO" >> "$GITHUB_ENV"
-
-      - name: Setup Node & Go
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache: true
-
-      - name: Install Build Deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang llvm libpcap-dev jq
-          if [ "${{ matrix.goarch }}" = "arm64" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu
-          fi
-          npm install -g pnpm
-
-      - name: Replace Core and Dependencies
-        run: |
-          cd wing
-          export GOTOOLCHAIN=auto
-          go mod edit -replace github.com/daeuniverse/dae=github.com/olicesx/dae@${{ env.CORE_PSEUDO }}
-          go mod edit -replace github.com/daeuniverse/outbound=${{ env.OB_REPO }}@${{ env.OB_PSEUDO }}
-          go mod tidy
-          cd ..
-
-      - name: Build
+      - name: Init build dependencies
         env:
-          GOOS: linux
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
-          GOTOOLCHAIN: auto
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          if [ "${{ matrix.goarch }}" = "arm64" ]; then
-            export CC=aarch64-linux-gnu-gcc
+          sudo swapoff -a
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install clang llvm npm jq
+          sudo npm install -g pnpm n
+          sudo n stable
+          if [ -d "daed/Makefile" ]; then
+            latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
+            echo "version=$latest_commit" >> "$GITHUB_ENV"
+          else
+            echo "version=$(date +%Y%m%d)" >> "$GITHUB_ENV"
           fi
-          make VERSION=${{ env.version }} OUTPUT=daed-${{ matrix.arch }}
 
-      - name: Upload packages
+      - name: Building daed via SDK
+        uses: sbwml/openwrt-gh-action-sdk@go1.26
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
+          FEEDNAME: packages_ci
+          PACKAGES: daed
+          NO_REFRESH_CHECK: true
+          V: s
+
+      - name: Extract binary
+        run: |
+          mkdir -p ./release_bin
+          TARGET_BIN=$(find sdk/build_dir/ -type f -name "daed" -executable | grep -v "host" | head -n 1)
+          if [ -n "$TARGET_BIN" ]; then
+            cp "$TARGET_BIN" ./release_bin/daed-${{ matrix.arch }}
+          else
+            IPK_PATH=$(find bin/packages/${{ matrix.arch }}/ -name "daed_*.ipk" | head -n 1)
+            tar -xOf "$IPK_PATH" data.tar.gz | tar -xzOf - ./usr/bin/daed > ./release_bin/daed-${{ matrix.arch }}
+          fi
+          chmod +x ./release_bin/daed-${{ matrix.arch }}
+
+      - name: Upload
         uses: ncipollo/release-action@v1
         with:
           name: daed_${{ env.version }}
           allowUpdates: true
           tag: daed_${{ env.version }}
           commit: main
-          token: ${{secrets.ACTIONS_DEPLOY_KEY}}
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           replacesArtifacts: true
-          artifacts: "daed-${{ matrix.arch }}"
+          artifacts: "./release_bin/daed-*"
