@@ -18,8 +18,12 @@ jobs:
         run: |
           UPSTREAM_DATA=$(curl -s "https://api.github.com/repos/olicesx/dae/branches/optimize/code-quality-fixes")
           UPSTREAM_COMMIT=$(echo "$UPSTREAM_DATA" | jq -r .commit.sha)
-          SHORT_COMMIT=${UPSTREAM_COMMIT:0:7}
           
+          if [ "$UPSTREAM_COMMIT" == "null" ]; then
+            exit 1
+          fi
+          
+          SHORT_COMMIT=${UPSTREAM_COMMIT:0:7}
           LOCAL_TAG=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r .tag_name)
           LAST_COMMIT=$(echo "$LOCAL_TAG" | cut -d'_' -f2)
 
@@ -70,9 +74,9 @@ jobs:
         with:
           version: 8
 
-      - name: Install & Build Web
+      - name: Web
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install --no-frozen-lockfile
           make dist
         env:
           TURBO_TELEMETRY_DISABLED: 1
@@ -91,3 +95,4 @@ jobs:
           files: daed-${{ matrix.arch }}
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           generate_release_notes: true
+          append_body: true
