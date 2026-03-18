@@ -17,13 +17,11 @@ jobs:
         include:
           - { goarch: amd64, arch_name: x86_64, gcc_pkg: gcc-multilib }
           - { goarch: arm64, arch_name: aarch64, gcc_pkg: gcc-aarch64-linux-gnu }
-    
     outputs:
       short_sha: ${{ steps.vars.outputs.short_sha }}
-
     steps:
       - name: Checkout Code
-        uses: actions/checkout: v4
+        uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
@@ -100,7 +98,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Cleanup Old Releases and Tags
+      - name: Cleanup Old Releases
         uses: dev-drprasad/delete-older-releases@v0.3.3
         with:
           keep_latest: 3
