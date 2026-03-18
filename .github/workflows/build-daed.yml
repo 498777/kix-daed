@@ -89,7 +89,6 @@ jobs:
           SKIP_SUBMODULES: 1
         run: |
           rm -rf dist daed daed-*
-          make clean
           make daed -B VERSION=a4da3e0 OUTPUT=daed-${{ matrix.arch_name }}
           ls -lh daed-${{ matrix.arch_name }}
 
