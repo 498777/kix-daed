@@ -5,78 +5,102 @@ on:
     - cron: '*/30 * * * *'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
-          - { goarch: amd64, arch_name: x86_64 }
-          - { goarch: arm64, arch_name: aarch64 }
+          - { goarch: amd64, arch_name: x86_64, gcc_pkg: gcc-multilib }
+          - { goarch: arm64, arch_name: aarch64, gcc_pkg: gcc-aarch64-linux-gnu }
+    
+    outputs:
+      short_sha: ${{ steps.vars.outputs.short_sha }}
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout: v4
         with:
           submodules: recursive
           fetch-depth: 0
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
 
-      - uses: actions/setup-node@v4
+      - name: Set Short SHA
+        id: vars
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - uses: actions/setup-go@v5
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+          cache: true
 
-      - name: Install Deps
+      - name: Install Dependencies
         run: |
           npm install -g pnpm
-          sudo apt-get update && sudo apt-get install -y build-essential libpcap-dev
+          sudo apt-get update
+          sudo apt-get install -y build-essential libpcap-dev ${{ matrix.gcc_pkg }}
 
       - name: Patch dae-core
         run: |
           cd wing
-          git remote add upstream https://github.com/daeuniverse/dae.git || true
-          git fetch upstream pull/936/head:patch-dns
-          git checkout patch-dns
+          git remote add patch_repo https://github.com/olicesx/dae.git || true
+          git fetch patch_repo optimize/code-quality-fixes
+          git checkout patch_repo/optimize/code-quality-fixes
           cd ..
 
-      - name: Build
+      - name: Build Web
+        run: make dist
+
+      - name: Build Binary
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
+          CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
         run: |
-          make dist
-          make daed VERSION=${{ github.sha }} OUTPUT=daed-linux-${{ matrix.arch_name }}
+          make daed VERSION=${{ steps.vars.outputs.short_sha }} OUTPUT=daed-${{ matrix.arch_name }}
 
-      - name: Upload
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: daed-${{ matrix.arch_name }}
-          path: daed-linux-${{ matrix.arch_name }}
+          path: daed-${{ matrix.arch_name }}
 
   release:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          tag_name: kix-daed_${{ github.sha }}
-          name: Release kix-daed_${{ github.sha }}
+          tag_name: kix-daed_${{ needs.build.outputs.short_sha }}
+          name: Release kix-daed_${{ needs.build.outputs.short_sha }}
+          draft: false
+          prerelease: false
           files: |
-            daed-x86_64/daed-linux-x86_64
-            daed-aarch64/daed-linux-aarch64
+            daed-x86_64/daed-x86_64
+            daed-aarch64/daed-aarch64
 
   cleanup:
     needs: release
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Cleanup
+      - name: Cleanup Old Releases and Tags
         uses: dev-drprasad/delete-older-releases@v0.3.3
         with:
           keep_latest: 3
@@ -84,3 +108,9 @@ jobs:
           delete_tags: true
         env:
           GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+
+      - name: Cleanup Workflow Runs
+        run: |
+          gh run delete --workflow build-daed.yml --created "<$(date -d '3 days ago' +%Y-%m-%d)" --confirm
+        env:
+          GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
