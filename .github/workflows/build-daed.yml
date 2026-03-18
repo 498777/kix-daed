@@ -1,4 +1,4 @@
-name: Build and Release daed (Arch)
+name: Build and Release daed (Alpine)
 
 on:
   schedule:
@@ -35,42 +35,24 @@ jobs:
     if: needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     container:
-      image: archlinux:latest
+      image: alpine:latest
     strategy:
       matrix:
         include:
           - goarch: amd64
             arch_name: x86_64
-            cross_pkg: gcc libpcap libnl
+            musl_arch: x86_64
           - goarch: arm64
             arch_name: aarch64
-            cross_pkg: aarch64-linux-gnu-gcc aarch64-linux-gnu-binutils
+            musl_arch: aarch64
     steps:
       - name: Install System Deps
         run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm git nodejs npm pnpm go base-devel pkgconf flex bison autoconf automake ${{ matrix.cross_pkg }}
-          
-          if [ "${{ matrix.goarch }}" == "arm64" ]; then
-            git clone --depth 1 https://github.com/thom311/libnl.git /tmp/libnl
-            cd /tmp/libnl
-            sh autogen.sh
-            ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu
-            make -j$(nproc)
-            make install
-            
-            git clone --depth 1 https://github.com/the-tcpdump-group/libpcap.git /tmp/libpcap
-            cd /tmp/libpcap
-            sh autogen.sh
-            export CC=aarch64-linux-gnu-gcc
-            export PKG_CONFIG_PATH=/usr/aarch64-linux-gnu/lib/pkgconfig
-            ./configure --host=aarch64-linux-gnu \
-                        --prefix=/usr/aarch64-linux-gnu \
-                        --with-pcap=linux \
-                        --with-libnl
-            make -j$(nproc)
-            make install
-          fi
+          apk update
+          apk add --no-cache \
+            git nodejs npm pnpm go build-base \
+            libpcap-dev libnl3-dev pkgconf bash \
+            gcc-${{ matrix.musl_arch }} binutils-${{ matrix.musl_arch }}
 
       - name: Clone All Sources
         run: |
@@ -85,7 +67,7 @@ jobs:
           cd source-daed
           pnpm install --no-frozen-lockfile
           find packages/dae-lsp -name "package.json" -exec sed -i 's/tsdown/tsdown --inlineOnly false/g' {} +
-          pnpm --filter "./packages/**" build || echo "Packages build warning, continuing..."
+          pnpm --filter "./packages/**" build || echo "Packages build warning"
           cd apps/web
           pnpm build
           cd ../..
@@ -97,15 +79,14 @@ jobs:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
-          CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
-          PKG_CONFIG_PATH: ${{ matrix.goarch == 'arm64' && '/usr/aarch64-linux-gnu/lib/pkgconfig' || '/usr/lib/pkgconfig' }}
+          CC: ${{ matrix.arch_name }}-alpine-linux-musl-gcc
           PATCH_SHA: ${{ needs.check.outputs.patch_sha }}
         run: |
           cd source-daed
           go mod edit -replace github.com/daeuniverse/dae=${{ github.workspace }}/source-patch
           go mod tidy
           go build -v -trimpath -tags webdist \
-            -ldflags "-s -w -X github.com/daeuniverse/daed/wing/internal/version.Version=$PATCH_SHA" \
+            -ldflags "-s -w -linkmode external -extldflags '-static' -X github.com/daeuniverse/daed/wing/internal/version.Version=$PATCH_SHA" \
             -o ${{ github.workspace }}/daed-${{ matrix.arch_name }} ./wing/main.go
 
       - name: Upload Artifact
