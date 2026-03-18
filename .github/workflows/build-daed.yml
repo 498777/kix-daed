@@ -49,11 +49,12 @@ jobs:
       - name: Install System Deps
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm git nodejs npm pnpm go base-devel pkgconf flex bison ${{ matrix.cross_pkg }}
+          pacman -S --noconfirm git nodejs npm pnpm go base-devel pkgconf flex bison autoconf automake ${{ matrix.cross_pkg }}
           
           if [ "${{ matrix.goarch }}" == "arm64" ]; then
             git clone --depth 1 https://github.com/the-tcpdump-group/libpcap.git /tmp/libpcap
             cd /tmp/libpcap
+            sh autogen.sh
             export CC=aarch64-linux-gnu-gcc
             ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu --with-pcap=linux
             make -j$(nproc)
