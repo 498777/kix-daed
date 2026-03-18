@@ -44,22 +44,26 @@ jobs:
             cross_pkg: gcc libpcap
           - goarch: arm64
             arch_name: aarch64
-            cross_pkg: aarch64-linux-gnu-gcc aarch64-linux-gnu-binutils aarch64-linux-gnu-libpcap
+            cross_pkg: aarch64-linux-gnu-gcc aarch64-linux-gnu-binutils
     steps:
       - name: Install System Deps
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm git nodejs npm pnpm go base-devel pkgconf
+          pacman -S --noconfirm git nodejs npm pnpm go base-devel pkgconf wget ${{ matrix.cross_pkg }}
+          
           if [ "${{ matrix.goarch }}" == "arm64" ]; then
-            echo -e "\n[alcasa-aarch64]\nSigLevel = Optional TrustAll\nServer = https://github.com/nishtahir/alcasa/releases/download/aarch64" >> /etc/pacman.conf
-            pacman -Sy --noconfirm
+            mkdir -p /opt/aarch64-pcap
+            cd /opt/aarch64-pcap
+            wget http://mirror.archlinuxarm.org/aarch64/core/libpcap-1.10.5-1-aarch64.pkg.tar.xz
+            tar -xf libpcap-1.10.5-1-aarch64.pkg.tar.xz
+            cp -r usr/include/* /usr/aarch64-linux-gnu/include/
+            cp -r usr/lib/*.so* /usr/aarch64-linux-gnu/lib/
           fi
-          pacman -S --noconfirm ${{ matrix.cross_pkg }}
 
       - name: Clone All Sources
         run: |
           git clone --depth 1 https://github.com/daeuniverse/daed.git source-daed
-          git clone --depth 1 https://github.com/dauniverse/dae-wing.git source-wing
+          git clone --depth 1 https://github.com/daeuniverse/dae-wing.git source-wing
           git clone --branch optimize/code-quality-fixes --depth 1 https://github.com/olicesx/dae.git source-patch
           rm -rf source-daed/wing
           cp -r source-wing source-daed/wing
@@ -81,7 +85,8 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
-          PKG_CONFIG_PATH: ${{ matrix.goarch == 'arm64' && '/usr/aarch64-linux-gnu/lib/pkgconfig' || '/usr/lib/pkgconfig' }}
+          CGO_CFLAGS: ${{ matrix.goarch == 'arm64' && '-I/usr/aarch64-linux-gnu/include' || '' }}
+          CGO_LDFLAGS: ${{ matrix.goarch == 'arm64' && '-L/usr/aarch64-linux-gnu/lib' || '' }}
           PATCH_SHA: ${{ needs.check.outputs.patch_sha }}
         run: |
           cd source-daed
