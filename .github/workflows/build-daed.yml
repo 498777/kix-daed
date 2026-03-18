@@ -55,7 +55,13 @@ jobs:
         if: env.SKIPPED == 'false'
         run: |
           git clone --recursive https://github.com/daeuniverse/daed.git daed_root
-          cd daed_root && pnpm install && pnpm build --filter daed && cd ..
+          cd daed_root
+          pnpm install
+          cd apps/web && pnpm build && cd ../..
+          
+          WEB_DIST=$(find apps/web -type d -name "dist" | head -n 1)
+          if [ -z "$WEB_DIST" ]; then exit 1; fi
+          cd ..
 
           git clone https://github.com/daeuniverse/dae-wing.git wing_src
           git clone --recursive https://github.com/olicesx/dae.git wing_src/dae-core
@@ -69,7 +75,7 @@ jobs:
           go mod tidy
 
           mkdir -p webrender/web
-          cp -rf ../daed_root/apps/web/dist/* webrender/web/
+          cp -rf ../daed_root/$WEB_DIST/* webrender/web/
 
           platforms=("amd64" "arm64")
           for arch in "${platforms[@]}"; do
@@ -84,6 +90,7 @@ jobs:
                     -X 'github.com/daeuniverse/dae-wing/db.AppVersion=${{ steps.check.outputs.tag }}'"
             
             go build -tags "embedallowed,trace" -ldflags="$LDFLAGS" -o ../daed-linux-$arch
+            cd ..
           done
 
       - name: Release
