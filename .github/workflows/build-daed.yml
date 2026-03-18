@@ -48,15 +48,17 @@ jobs:
 
       - name: pnpm
         if: env.SKIPPED == 'false'
-        uses: pnpm/action-setup@v2
-        with: { version: 8 }
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+          run_install: false
 
       - name: Build
         if: env.SKIPPED == 'false'
         run: |
           git clone --recursive https://github.com/daeuniverse/daed.git daed_root
           cd daed_root
-          pnpm install
+          pnpm install --no-frozen-lockfile --ignore-scripts
           cd apps/web && pnpm build && cd ../..
           
           WEB_DIST=$(find apps/web -type d -name "dist" | head -n 1)
