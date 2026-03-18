@@ -41,7 +41,7 @@ jobs:
         include:
           - goarch: amd64
             arch_name: x86_64
-            cross_pkg: gcc libpcap
+            cross_pkg: gcc libpcap libnl
           - goarch: arm64
             arch_name: aarch64
             cross_pkg: aarch64-linux-gnu-gcc aarch64-linux-gnu-binutils
@@ -52,11 +52,27 @@ jobs:
           pacman -S --noconfirm git nodejs npm pnpm go base-devel pkgconf flex bison autoconf automake ${{ matrix.cross_pkg }}
           
           if [ "${{ matrix.goarch }}" == "arm64" ]; then
+            # 1. 交叉编译 libnl
+            git clone --depth 1 https://github.com/thom311/libnl.git /tmp/libnl
+            cd /tmp/libnl
+            sh autogen.sh
+            ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu
+            make -j$(nproc)
+            make install
+            
+            # 2. 交叉编译 libpcap (此时已经能找到 libnl)
             git clone --depth 1 https://github.com/the-tcpdump-group/libpcap.git /tmp/libpcap
             cd /tmp/libpcap
             sh autogen.sh
             export CC=aarch64-linux-gnu-gcc
-            ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu --with-pcap=linux
+            export PKG_CONFIG_PATH=/usr/aarch64-linux-gnu/lib/pkgconfig
+            ./configure --host=aarch64-linux-gnu \
+                        --prefix=/usr/aarch64-linux-gnu \
+                        --with-pcap=linux \
+                        --with-libnl \
+                        --disable-dbus \
+                        --disable-bluetooth \
+                        --disable-rdma
             make -j$(nproc)
             make install
           fi
@@ -86,6 +102,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
+          PKG_CONFIG_PATH: ${{ matrix.goarch == 'arm64' && '/usr/aarch64-linux-gnu/lib/pkgconfig' || '/usr/lib/pkgconfig' }}
           PATCH_SHA: ${{ needs.check.outputs.patch_sha }}
         run: |
           cd source-daed
