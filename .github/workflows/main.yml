@@ -52,6 +52,7 @@ jobs:
       - name: Build Frontend
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
+          TSDOWN_INLINE_ONLY: "false"
         run: |
           cd ./daed-src
           npm install -g pnpm
