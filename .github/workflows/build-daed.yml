@@ -113,7 +113,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
         run: |
-          CUTOFF_DATE=$(date -d '3 days ago' +%Y-%m-%d)
+          CUTOFF_DATE=$(date -d '1 days ago' +%Y-%m-%d)
           for workflow in $(gh workflow list --json id -q '.[].id'); do
             gh run delete --workflow "$workflow" --created "<$CUTOFF_DATE" --confirm || true
           done
