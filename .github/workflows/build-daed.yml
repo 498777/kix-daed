@@ -1,120 +1,48 @@
-name: Integrated daed Build
+name: Build packages daed
 
 on:
-  schedule:
-    - cron: '*/30 * * * *'
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-  check-and-build:
+  build:
+    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - aarch64_generic
+          - x86_64
+        sdk:
+          - openwrt-24.10
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@main
         with:
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          fetch-depth: 0
 
-      - name: Check
-        id: check
-        run: |
-          DAED_ID=$(git ls-remote https://github.com/daeuniverse/daed.git HEAD | awk '{print substr($1,1,7)}')
-          WING_ID=$(git ls-remote https://github.com/daeuniverse/dae-wing.git HEAD | awk '{print substr($1,1,7)}')
-          CORE_ID=$(git ls-remote https://github.com/olicesx/dae.git HEAD | awk '{print substr($1,1,7)}')
-          TAG_NAME="daed_${DAED_ID}-wing_${WING_ID}-core_${CORE_ID}"
-          
-          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
-          echo "core_id=$CORE_ID" >> $GITHUB_OUTPUT
-          
-          HTTP_STATUS=$(curl -o /dev/null -s -w "%{http_code}" \
-            -H "Authorization: token ${{ secrets.ACTIONS_DEPLOY_KEY }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG_NAME}")
-          
-          if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "SKIPPED=true" >> $GITHUB_ENV
-          else
-            echo "SKIPPED=false" >> $GITHUB_ENV
-          fi
+      - name: Get node-empty
+        run: git clone https://github.com/sbwml/node-empty
 
-      - name: Deps
-        if: env.SKIPPED == 'false'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang llvm libelf-dev gcc-aarch64-linux-gnu make git wget
-
-      - name: Go
-        if: env.SKIPPED == 'false'
-        uses: actions/setup-go@v4
-        with: { go-version: '1.21' }
-
-      - name: pnpm
-        if: env.SKIPPED == 'false'
-        uses: pnpm/action-setup@v3
-        with:
-          version: 9
-          run_install: false
-
-      - name: Build
-        if: env.SKIPPED == 'false'
-        run: |
-          git clone --recursive https://github.com/daeuniverse/daed.git daed_root
-          cd daed_root
-          pnpm install --no-frozen-lockfile
-          pnpm --filter daed build
-          
-          WEB_DIST=$(find apps/web -type d -name "dist" | head -n 1)
-          if [ -z "$WEB_DIST" ]; then exit 1; fi
-          FULL_WEB_DIST_PATH=$(pwd)/$WEB_DIST
-          cd ..
-
-          git clone https://github.com/daeuniverse/dae-wing.git wing_src
-          git clone --recursive https://github.com/olicesx/dae.git wing_src/dae-core
-          
-          git clone --depth=1 -b perf/complete-optimizations https://github.com/olicesx/outbound.git outbound_src
-          git clone --depth=1 -b main https://github.com/olicesx/quic-go.git quic_src
-
-          cd wing_src
-          go mod edit -replace github.com/daeuniverse/outbound=../outbound_src
-          go mod edit -replace github.com/daeuniverse/quic-go=../quic_src
-          go mod tidy
-
-          mkdir -p webrender/web
-          cp -rf $FULL_WEB_DIST_PATH/* webrender/web/
-
-          platforms=("amd64" "arm64")
-          for arch in "${platforms[@]}"; do
-            export GOOS=linux GOARCH=$arch CGO_ENABLED=1
-            [ "$arch" = "arm64" ] && export CC=aarch64-linux-gnu-gcc
-            
-            go generate ./...
-            cd dae-core && go generate ./control/control.go ./trace/trace.go && cd ..
-            
-            LDFLAGS="-s -w -linkmode external -extldflags '-static' \
-                    -X 'github.com/daeuniverse/dae-wing/db.AppName=daed' \
-                    -X 'github.com/daeuniverse/dae-wing/db.AppVersion=${{ steps.check.outputs.tag }}'"
-            
-            go build -tags "embedallowed,trace" -ldflags="$LDFLAGS" -o ../daed-linux-$arch
-            cd ..
-          done
-
-      - name: Release
-        if: env.SKIPPED == 'false'
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.check.outputs.tag }}
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          files: daed-linux-*
-          body: |
-            Core: `${{ steps.check.outputs.core_id }}`
-            Optimized Build.
-
-  prune:
-    runs-on: ubuntu-latest
-    needs: check-and-build
-    steps:
-      - name: Prune
-        uses: dev-drprasad/delete-older-releases@v0.2.1
-        with:
-          keep_latest: 1
-          delete_older_than: 3d
+      - name: Init build dependencies
         env:
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo swapoff -a
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install clang llvm npm
+          sudo npm install -g pnpm n taze
+          sudo n stable
+          latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
+          latest_wing_commit=$(grep "WING_VERSION:=wing-" daed/Makefile | sed 's/.*wing-//' | head -n 1)
+          latest_core_commit=$(grep "CORE_VERSION:=core-" daed/Makefile | sed 's/.*core-//' | head -n 1)
+          timestamp=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.author.date')
+          formatted_timestamp=$(date --date="$timestamp" "+%Y-%m-%d")
+          echo "version=$latest_commit-wing_$latest_wing_commit-core_$latest_core_commit" >> "$GITHUB_ENV"
+
+      - name: Building packages
+        uses:
