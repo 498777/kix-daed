@@ -40,38 +40,32 @@ jobs:
         with:
           node-version: 20
 
+      - name: Setup PNPM
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+          run_install: false
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
           cache: true
 
-      - name: Install Deps
+      - name: Install System Deps
         run: |
-          npm install -g pnpm
           sudo apt-get update
           sudo apt-get install -y build-essential libpcap-dev ${{ matrix.gcc_pkg }}
 
       - name: Patch dae-core
         run: |
           if [ -d "wing" ]; then
-            TARGET_DIR="wing"
-          elif [ -d "backend" ]; then
-            TARGET_DIR="backend"
-          else
-            TARGET_DIR="."
-          fi
-          
-          cd "$TARGET_DIR"
-          if [ -f "go.mod" ]; then
+            cd wing
             git remote add patch_repo https://github.com/olicesx/dae.git || true
             git fetch patch_repo optimize/code-quality-fixes
             git checkout patch_repo/optimize/code-quality-fixes
+            cd ..
           fi
-          cd ${{ github.workspace }}
-
-      - name: Build Web
-        run: make dist
 
       - name: Build Binary
         env:
@@ -79,10 +73,11 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
+          SKIP_SUBMODULES: 1
         run: |
           make daed VERSION=${{ steps.vars.outputs.short_sha }} OUTPUT=daed-${{ matrix.arch_name }}
 
-      - name: Upload
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: daed-${{ matrix.arch_name }}
@@ -92,7 +87,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Download
+      - name: Download Artifacts
         uses: actions/download-artifact@v4
 
       - name: Create Release
@@ -110,20 +105,13 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Cleanup Releases
-        uses: dev-drprasad/delete-older-releases@v0.3.3
-        with:
-          keep_latest: 3
-          delete_expired_data: 3 days
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-
-      - name: Cleanup All Workflow Runs
+      - name: Cleanup All
         env:
           GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
         run: |
-          CUTOFF_DATE=$(date -d '3 days ago' +%Y-%m-%d)
-          for workflow in $(gh workflow list --json id -q '.[].id'); do
-            gh run delete --workflow "$workflow" --created "<$CUTOFF_DATE" --confirm || true
+          gh release list --limit 100 | grep "kix-daed_" | tail -n +4 | awk '{print $1}' | xargs -I {} gh release delete {} --yes --cleanup-tag || true
+          
+          CUTOFF=$(date -d '3 days ago' +%Y-%m-%d)
+          for wf in $(gh workflow list --json id -q '.[].id'); do
+            gh run delete --workflow "$wf" --created "<$CUTOFF" --confirm || true
           done
