@@ -41,10 +41,12 @@ jobs:
         include:
           - goarch: amd64
             arch_name: x86_64
-            musl_arch: x86_64
+            cross_pkg: gcc g++
+            cc_bin: gcc
           - goarch: arm64
             arch_name: aarch64
-            musl_arch: aarch64
+            cross_pkg: gcc-aarch64-linux-musl g++-aarch64-linux-musl
+            cc_bin: aarch64-linux-musl-gcc
     steps:
       - name: Install System Deps
         run: |
@@ -52,7 +54,7 @@ jobs:
           apk add --no-cache \
             git nodejs npm pnpm go build-base \
             libpcap-dev libnl3-dev pkgconf bash \
-            gcc-${{ matrix.musl_arch }} binutils-${{ matrix.musl_arch }}
+            linux-headers ${{ matrix.cross_pkg }}
 
       - name: Clone All Sources
         run: |
@@ -79,7 +81,7 @@ jobs:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
-          CC: ${{ matrix.arch_name }}-alpine-linux-musl-gcc
+          CC: ${{ matrix.cc_bin }}
           PATCH_SHA: ${{ needs.check.outputs.patch_sha }}
         run: |
           cd source-daed
