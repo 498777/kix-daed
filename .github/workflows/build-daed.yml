@@ -1,134 +1,93 @@
-name: Build and Release daed (Dynamic)
+name: Track Upstream and Release
 
 on:
   schedule:
     - cron: '0 * * * *'
   workflow_dispatch:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   check:
     runs-on: ubuntu-latest
     outputs:
-      should_build: ${{ steps.get_sha.outputs.should_build }}
-      patch_sha: ${{ steps.get_sha.outputs.patch_sha }}
+      should_build: ${{ steps.check.outputs.changed }}
+      upstream_commit: ${{ steps.check.outputs.commit }}
+      short_commit: ${{ steps.check.outputs.short_commit }}
     steps:
-      - name: Get Remote Patch SHA
-        id: get_sha
+      - name: Check Upstream
+        id: check
+        run: |
+          UPSTREAM_DATA=$(curl -s "https://api.github.com/repos/olicesx/dae/branches/optimize/code-quality-fixes")
+          UPSTREAM_COMMIT=$(echo "$UPSTREAM_DATA" | jq -r .commit.sha)
+          SHORT_COMMIT=${UPSTREAM_COMMIT:0:7}
+          
+          LOCAL_TAG=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r .tag_name)
+          LAST_COMMIT=$(echo "$LOCAL_TAG" | cut -d'_' -f2)
+
+          if [ "$SHORT_COMMIT" != "$LAST_COMMIT" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "commit=$UPSTREAM_COMMIT" >> $GITHUB_OUTPUT
+            echo "short_commit=$SHORT_COMMIT" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Cleanup
+        if: steps.check.outputs.changed == 'false'
         env:
           GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
         run: |
-          FULL_SHA=$(git ls-remote https://github.com/olicesx/dae.git optimize/code-quality-fixes | awk '{print $1}')
-          SHORT_SHA=${FULL_SHA:0:7}
-          echo "patch_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
-          if gh release view --repo ${{ github.repository }} "kix-daed_$SHORT_SHA" >/dev/null 2>&1; then
-            echo "should_build=false" >> $GITHUB_OUTPUT
-          else
-            echo "should_build=true" >> $GITHUB_OUTPUT
-          fi
+          gh run list --limit 100 --json databaseId,createdAt -q '.[] | select(.createdAt < (now - 86400 | strftime("%Y-%m-%dT%H:%M:%SZ"))) | .databaseId' | xargs -I {} gh run delete {}
 
   build:
     needs: check
     if: needs.check.outputs.should_build == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - goarch: amd64
-            arch_name: x86_64
-            gcc_pkg: gcc
-          - goarch: arm64
-            arch_name: aarch64
-            gcc_pkg: gcc-aarch64-linux-gnu
+        arch: [amd64, arm64]
     steps:
-      - name: Install System Deps
-        run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y git nodejs npm golang-go pkg-config \
-            libpcap-dev libnl-3-dev libnl-genl-3-dev \
-            ${{ matrix.gcc_pkg }}
-          
-          if [ "${{ matrix.goarch }}" == "arm64" ]; then
-            sudo apt-get install -y libpcap-dev:arm64 libnl-3-dev:arm64 libnl-genl-3-dev:arm64
-          fi
-          sudo npm install -g pnpm
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: olicesx/dae
+          ref: ${{ needs.check.outputs.upstream_commit }}
+          submodules: recursive
+          fetch-depth: 0
 
-      - name: Clone All Sources
-        run: |
-          git clone --depth 1 https://github.com/daeuniverse/daed.git source-daed
-          git clone --depth 1 https://github.com/daeuniverse/dae-wing.git source-wing
-          git clone --branch optimize/code-quality-fixes --depth 1 https://github.com/olicesx/dae.git source-patch
-          rm -rf source-daed/wing
-          cp -r source-wing source-daed/wing
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
 
-      - name: Build Web
-        run: |
-          cd source-daed
-          pnpm install --no-frozen-lockfile
-          find packages/dae-lsp -name "package.json" -exec sed -i 's/tsdown/tsdown --inlineOnly false/g' {} +
-          pnpm --filter "./packages/**" build || echo "Web packages warning, continuing..."
-          cd apps/web
-          pnpm build
-          cd ../..
-          mkdir -p source-daed/wing/internal/webdist/dist
-          cp -r source-daed/apps/web/dist/. source-daed/wing/internal/webdist/dist/
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-      - name: Build Binary
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+
+      - name: Install & Build Web
+        run: |
+          pnpm install --frozen-lockfile
+          make dist
         env:
-          GOOS: linux
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
-          CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
-          PKG_CONFIG_PATH: ${{ matrix.goarch == 'arm64' && '/usr/lib/aarch64-linux-gnu/pkgconfig' || '/usr/lib/x86_64-linux-gnu/pkgconfig' }}
-          PATCH_SHA: ${{ needs.check.outputs.patch_sha }}
+          TURBO_TELEMETRY_DISABLED: 1
+          DO_NOT_TRACK: 1
+
+      - name: Compile
         run: |
-          cd source-daed
-          # 使用 replace 将官方 dae 替换为你指定的优化分支源码
-          go mod edit -replace github.com/daeuniverse/dae=${{ github.workspace }}/source-patch
-          go mod tidy
-          go build -v -trimpath -tags webdist \
-            -ldflags "-s -w -X github.com/daeuniverse/daed/wing/internal/version.Version=$PATCH_SHA" \
-            -o ${{ github.workspace }}/daed-${{ matrix.arch_name }} ./wing/main.go
+          export GOOS=linux
+          export GOARCH=${{ matrix.arch }}
+          make daed OUTPUT=daed-${{ matrix.arch }} VERSION=${{ needs.check.outputs.short_commit }}
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: binary-${{ matrix.arch_name }}
-          path: daed-${{ matrix.arch_name }}
-
-  release:
-    needs: [check, build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download
-        uses: actions/download-artifact@v4
-        with:
-          path: ./artifacts
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: kix-daed_${{ needs.check.outputs.short_commit }}
+          files: daed-${{ matrix.arch }}
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          tag_name: kix-daed_${{ needs.check.outputs.patch_sha }}
-          name: Release kix-daed_${{ needs.check.outputs.patch_sha }}
-          files: ./artifacts/binary-*/*
-
-  cleanup:
-    needs: [check, release]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Cleanup
-        env:
-          GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          REPO: ${{ github.repository }}
-        run: |
-          gh release list --repo $REPO --limit 100 | grep "kix-daed_" | tail -n +4 | awk '{print $1}' | xargs -I {} gh release delete {} --repo $REPO --yes --cleanup-tag || true
-          CUTOFF=$(date -d '3 days ago' -u +%Y-%m-%dT%H:%M:%SZ)
-          RUNS=$(gh run list --repo $REPO --limit 100 --json databaseId,createdAt -q ".[] | select(.createdAt < \"$CUTOFF\") | .databaseId")
-          for run_id in $RUNS; do
-            gh run delete --repo $REPO "$run_id" || true
-          done
+          generate_release_notes: true
