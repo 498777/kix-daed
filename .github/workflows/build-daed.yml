@@ -24,7 +24,6 @@ jobs:
           FULL_SHA=$(git ls-remote https://github.com/olicesx/dae.git optimize/code-quality-fixes | awk '{print $1}')
           SHORT_SHA=${FULL_SHA:0:7}
           echo "patch_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
-          # 加上 --repo 避免 git 识别错误
           if gh release view --repo ${{ github.repository }} "kix-daed_$SHORT_SHA" >/dev/null 2>&1; then
             echo "should_build=false" >> $GITHUB_OUTPUT
           else
@@ -49,16 +48,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           submodules: recursive
           fetch-depth: 0
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-
-      - name: Debug Directory Structure
-        run: |
-          echo "Checking current directory: $(pwd)"
-          ls -R | grep ":$" | sed -e 's/:$//' -e 's/[^-][^\/]*\//--/g' -e 's/^/   /'
-          echo "Looking for web directory..."
-          find . -maxdepth 4 -name "web"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -83,14 +75,11 @@ jobs:
 
       - name: Build Web
         run: |
-          # 使用 find 动态定位，解决目录不存在的问题
-          WEB_PATH=$(find . -type d -path "*/apps/web" | head -n 1)
-          if [ -z "$WEB_PATH" ]; then echo "Error: web directory not found"; exit 1; fi
-          cd "$WEB_PATH"
+          cd apps/web
           pnpm install
           pnpm build
-          mkdir -p ${{ github.workspace }}/dist_web
-          cp -r dist/* ${{ github.workspace }}/dist_web/
+          mkdir -p ../../dist_web
+          cp -r dist/* ../../dist_web/
 
       - name: Patch & Build Wing
         env:
@@ -100,15 +89,13 @@ jobs:
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
           PATCH_SHA: ${{ needs.check.outputs.patch_sha }}
         run: |
-          WING_PATH=$(find . -type d -name "dae-wing" | head -n 1)
-          if [ -z "$WING_PATH" ]; then echo "Error: dae-wing not found"; exit 1; fi
-          cd "$WING_PATH"
+          cd wing
           git remote add patch_repo https://github.com/olicesx/dae.git || true
           git fetch patch_repo optimize/code-quality-fixes
           git checkout $PATCH_SHA
           go mod tidy
           [ -f Makefile ] && make deps || true
-          go build -v -trimpath -tags webdist -ldflags "-s -w -X github.com/daeuniverse/daed/wing/internal/version.Version=$PATCH_SHA" -o ${{ github.workspace }}/daed-${{ matrix.arch_name }} ./main.go
+          go build -v -trimpath -tags webdist -ldflags "-s -w -X github.com/daeuniverse/daed/wing/internal/version.Version=$PATCH_SHA" -o ../daed-${{ matrix.arch_name }} ./main.go
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -143,9 +130,7 @@ jobs:
           GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           REPO: ${{ github.repository }}
         run: |
-          # 使用 --repo 显式指定，不再报错 "not a git repository"
           gh release list --repo $REPO --limit 100 | grep "kix-daed_" | tail -n +4 | awk '{print $1}' | xargs -I {} gh release delete {} --repo $REPO --yes --cleanup-tag || true
-          
           CUTOFF=$(date -d '3 days ago' -u +%Y-%m-%dT%H:%M:%SZ)
           RUNS=$(gh run list --repo $REPO --limit 100 --json databaseId,createdAt -q ".[] | select(.createdAt < \"$CUTOFF\") | .databaseId")
           for run_id in $RUNS; do
