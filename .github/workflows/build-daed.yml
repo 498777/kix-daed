@@ -75,10 +75,9 @@ jobs:
         run: |
           cd source-daed
           pnpm install --no-frozen-lockfile
-          cd apps/web
-          pnpm build
-          mkdir -p ../../wing/internal/webdist/dist
-          cp -r dist/* ../../wing/internal/webdist/dist/
+          pnpm --filter "./apps/web..." build
+          mkdir -p wing/internal/webdist/dist
+          cp -r apps/web/dist/* wing/internal/webdist/dist/
 
       - name: Build Binary
         env:
