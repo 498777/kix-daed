@@ -47,10 +47,13 @@ jobs:
             gcc_pkg: gcc-aarch64-linux-gnu
             libpcap_arch: arm64
     steps:
-      - name: Clone Source
+      - name: Clone All Sources
         run: |
           git clone --depth 1 https://github.com/daeuniverse/daed.git source-daed
+          git clone --depth 1 https://github.com/daeuniverse/dae-wing.git source-wing
           git clone --branch optimize/code-quality-fixes --depth 1 https://github.com/olicesx/dae.git source-patch
+          rm -rf source-daed/wing
+          cp -r source-wing source-daed/wing
 
       - name: Setup Environment
         uses: actions/setup-node@v4
@@ -71,6 +74,12 @@ jobs:
       - name: Install Cross-Compile Deps
         run: |
           sudo dpkg --add-architecture arm64
+          # 修正软件源：将 arm64 的源指向 ports.ubuntu.com
+          sudo sed -i 's/deb http/deb [arch=amd64] http/g' /etc/apt/sources.list.d/*.list /etc/apt/sources.list || true
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs) main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs)-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs)-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential \
@@ -85,8 +94,8 @@ jobs:
           cd apps/web
           pnpm build
           cd ../..
-          mkdir -p wing/internal/webdist/dist
-          cp -r apps/web/dist/* wing/internal/webdist/dist/
+          mkdir -p source-daed/wing/internal/webdist/dist
+          cp -r source-daed/apps/web/dist/* source-daed/wing/internal/webdist/dist/
 
       - name: Build Binary
         env:
@@ -94,7 +103,6 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
-          PKG_CONFIG_PATH: /usr/lib/${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu' || 'x86_64-linux-gnu' }}/pkgconfig
           PATCH_SHA: ${{ needs.check.outputs.patch_sha }}
         run: |
           cd source-daed
