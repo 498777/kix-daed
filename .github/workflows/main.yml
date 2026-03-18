@@ -1,69 +1,89 @@
-name: Build daed binary
+name: Direct Build daed Bundle
 
 on:
   workflow_dispatch:
   push:
+    paths:
+      - 'daed/Makefile'
     branches:
       - main
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        arch:
-          - aarch64_generic    
-          - x86_64
-        sdk:
-          - openwrt-24.10
+        include:
+          - goarch: amd64
+            arch_name: x86_64
+          - goarch: arm64
+            arch_name: aarch64
 
     steps:
-      - uses: actions/checkout@main
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: Init build dependencies
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      - name: Setup Build Environment
         run: |
-          sudo swapoff -a
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install clang llvm npm jq
-          sudo npm install -g pnpm n
-          sudo n stable
-          echo "version=$(date +%Y%m%d)" >> "$GITHUB_ENV"
-
-      - name: Compile daed
-        uses: sbwml/openwrt-gh-action-sdk@go1.26
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEEDNAME: packages_ci
-          PACKAGES: daed
-          BUILD_QUEUED: true
-          NO_REFRESH_CHECK: true
-          V: s
-
-      - name: Extract binary
-        run: |
-          mkdir -p ./release_bin
-          TARGET_BIN=$(find sdk/build_dir/ -type f -name "daed" -executable | grep -v "host" | head -n 1)
-          if [ -n "$TARGET_BIN" ]; then
-            cp "$TARGET_BIN" ./release_bin/daed-${{ matrix.arch }}
-            chmod +x ./release_bin/daed-${{ matrix.arch }}
-          else
-            exit 1
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev gcc-multilib musl-tools
+          if [ "${{ matrix.goarch }}" = "arm64" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
           fi
 
-      - name: Create Release
+      - name: Setup Node & Go
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Clone Sources
+        run: |
+          WING_SHA=$(grep "WING_VERSION:=" daed/Makefile | sed 's/.*wing-//')
+          CORE_SHA=$(grep "CORE_VERSION:=" daed/Makefile | sed 's/.*core-//')
+          DAED_SHA=$(grep "PKG_SOURCE_VERSION:=" daed/Makefile | cut -d= -f2)
+          
+          git clone https://github.com/daeuniverse/daed.git ./daed-src && cd ./daed-src && git checkout $DAED_SHA && cd ..
+          git clone https://github.com/daeuniverse/dae-wing.git ./wing-src && cd ./wing-src && git checkout $WING_SHA && cd ..
+          git clone https://github.com/olicesx/dae.git ./core-src && cd ./core-src && git checkout $CORE_SHA && cd ..
+
+      - name: Build Frontend
+        run: |
+          cd ./daed-src
+          npm install -g pnpm
+          pnpm install && pnpm build
+          mkdir -p ../dist
+          [ -d "apps/web/dist" ] && cp -r apps/web/dist/* ../dist/ || cp -r dist/* ../dist/
+
+      - name: Build eBPF
+        run: |
+          cd ./core-src
+          make ebpf
+
+      - name: Build Final Binary
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+        run: |
+          [ "${{ matrix.goarch }}" = "arm64" ] && export CC=aarch64-linux-gnu-gcc
+          cd ./wing-src
+          mkdir -p webrender/web
+          cp -r ../dist/* webrender/web/
+          find webrender/web -type f -size +4k ! -name "*.gz" -exec gzip -9 -k {} \;
+          ln -s ../core-src dae-core
+          go generate ./...
+          go build -tags=embedallowed -trimpath \
+            -ldflags="-s -w -X github.com/daeuniverse/dae-wing/db.AppVersion=$(date +%Y%m%d)" \
+            -o ../daed-${{ matrix.arch_name }} .
+
+      - name: Release Binary
         uses: ncipollo/release-action@v1
         with:
-          name: daed_${{ env.version }}
-          allowUpdates: true
-          tag: daed_${{ env.version }}
-          commit: main
+          name: daed_bundle_${{ github.run_id }}
+          tag: daed_${{ github.run_id }}
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          artifacts: "./daed-*"
           replacesArtifacts: true
-          artifacts: "./release_bin/daed-*"
