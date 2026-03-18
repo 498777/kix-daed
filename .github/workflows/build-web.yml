@@ -74,18 +74,33 @@ jobs:
           formatted_timestamp=$(date --date="$timestamp" "+%Y-%m-%d")
           echo "version=$formatted_timestamp-$latest_commit" >> "$GITHUB_ENV"
 
-      - name: Commit and Push
+      - name: Commit files
         if: steps.check.outputs.update_needed == 'true'
         run: |
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
           git add .
-          git commit -m "Update `date +%Y/%m/%d\ %H:%M:%S\ %Z`" -a
-          git push origin main
+          git commit -m "Update $(date +'%Y/%m/%d %H:%M:%S %Z')" -a || echo "No changes to commit"
+
+      - name: Push changes
+        if: steps.check.outputs.update_needed == 'true'
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          branch: main
+
+      - name: Delete Older Releases
+        if: steps.check.outputs.update_needed == 'true'
+        uses: dev-drprasad/delete-older-releases@master
+        with:
+          keep_latest: 3
+          delete_tags: true
         env:
           GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
 
       - name: Cleanup Actions
-        run: |
-          echo "Cleaning up..."
-        continue-on-error: true
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          repository: ${{ github.repository }}
+          retain_days: 3
