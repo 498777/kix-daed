@@ -34,19 +34,15 @@ jobs:
           sudo -E apt-get -qq install clang llvm npm jq
           sudo npm install -g pnpm n
           sudo n stable
-          if [ -d "daed/Makefile" ]; then
-            latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
-            echo "version=$latest_commit" >> "$GITHUB_ENV"
-          else
-            echo "version=$(date +%Y%m%d)" >> "$GITHUB_ENV"
-          fi
+          echo "version=$(date +%Y%m%d)" >> "$GITHUB_ENV"
 
-      - name: Building daed via SDK
+      - name: Compile daed
         uses: sbwml/openwrt-gh-action-sdk@go1.26
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
           FEEDNAME: packages_ci
           PACKAGES: daed
+          BUILD_QUEUED: true
           NO_REFRESH_CHECK: true
           V: s
 
@@ -56,13 +52,12 @@ jobs:
           TARGET_BIN=$(find sdk/build_dir/ -type f -name "daed" -executable | grep -v "host" | head -n 1)
           if [ -n "$TARGET_BIN" ]; then
             cp "$TARGET_BIN" ./release_bin/daed-${{ matrix.arch }}
+            chmod +x ./release_bin/daed-${{ matrix.arch }}
           else
-            IPK_PATH=$(find bin/packages/${{ matrix.arch }}/ -name "daed_*.ipk" | head -n 1)
-            tar -xOf "$IPK_PATH" data.tar.gz | tar -xzOf - ./usr/bin/daed > ./release_bin/daed-${{ matrix.arch }}
+            exit 1
           fi
-          chmod +x ./release_bin/daed-${{ matrix.arch }}
 
-      - name: Upload
+      - name: Create Release
         uses: ncipollo/release-action@v1
         with:
           name: daed_${{ env.version }}
