@@ -80,16 +80,25 @@ jobs:
             cd ..
           fi
 
-      - name: Build Binary
+      - name: Manual Build
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
-          SKIP_SUBMODULES: 1
         run: |
-          rm -rf dist daed daed-*
-          make daed -B VERSION=a4da3e0 OUTPUT=daed-${{ matrix.arch_name }}
+          pnpm install
+          pnpm build
+          if [ -d "apps/web/dist" ]; then
+            cp -r apps/web/dist ./dist
+          fi
+          
+          cd wing
+          go mod tidy
+          make deps || true
+          go build -v -trimpath -ldflags "-s -w -X github.com/daeuniverse/daed/wing/internal/version.Version=a4da3e0" -o ../daed-${{ matrix.arch_name }} ./main.go
+          cd ..
+          
           ls -lh daed-${{ matrix.arch_name }}
 
       - name: Upload Artifact
