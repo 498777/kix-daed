@@ -49,10 +49,17 @@ jobs:
           git clone https://github.com/daeuniverse/dae-wing.git ./wing-src && cd ./wing-src && git checkout $WING_SHA && cd ..
           git clone https://github.com/olicesx/dae.git ./core-src && cd ./core-src && git checkout $CORE_SHA && cd ..
 
+      - name: Patch dae-lsp Config
+        run: |
+          # 核心修复：直接修改子包的配置文件，强制关闭 tsdown 的严格校验
+          cd ./daed-src/packages/dae-lsp
+          if [ -f "tsdown.config.ts" ]; then
+            sed -i "s/bundle: true/bundle: true, inlineOnly: false/g" tsdown.config.ts
+          fi
+
       - name: Build Frontend
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
-          TSDOWN_INLINE_ONLY: "false"
         run: |
           cd ./daed-src
           npm install -g pnpm
