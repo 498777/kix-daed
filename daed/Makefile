@@ -59,15 +59,12 @@ jobs:
 
       - name: Patch dae-core
         run: |
-          # 根据 Makefile，确认后端目录为 wing
           if [ -d "wing" ]; then
             cd wing
             git remote add patch_repo https://github.com/olicesx/dae.git || true
             git fetch patch_repo optimize/code-quality-fixes
             git checkout patch_repo/optimize/code-quality-fixes
             cd ..
-          else
-            echo "Warning: wing directory not found, skipping patch"
           fi
 
       - name: Build Binary
@@ -78,7 +75,6 @@ jobs:
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
           SKIP_SUBMODULES: 1
         run: |
-          # 直接调用 make daed，它会自动触发 dist 和后端编译
           make daed VERSION=${{ steps.vars.outputs.short_sha }} OUTPUT=daed-${{ matrix.arch_name }}
 
       - name: Upload Artifact
@@ -113,10 +109,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
         run: |
-          # 清理旧 Release
-          gh release list --limit 100 | grep "kix-daed_" | tail -n +4 | awk '{print $1}' | x86 -I {} gh release delete {} --yes --cleanup-tag || true
+          gh release list --limit 100 | grep "kix-daed_" | tail -n +4 | awk '{print $1}' | xargs -I {} gh release delete {} --yes --cleanup-tag || true
           
-          # 清理 3 天前的 Workflow Runs
           CUTOFF=$(date -d '3 days ago' +%Y-%m-%d)
           for wf in $(gh workflow list --json id -q '.[].id'); do
             gh run delete --workflow "$wf" --created "<$CUTOFF" --confirm || true
