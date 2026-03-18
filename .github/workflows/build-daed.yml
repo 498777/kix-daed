@@ -41,23 +41,25 @@ jobs:
         include:
           - goarch: amd64
             arch_name: x86_64
-            cross_pkg: gcc
+            cross_pkg: gcc libpcap
           - goarch: arm64
             arch_name: aarch64
-            cross_pkg: aarch64-linux-gnu-gcc aarch64-linux-gnu-binutils
+            cross_pkg: aarch64-linux-gnu-gcc aarch64-linux-gnu-binutils aarch64-linux-gnu-libpcap
     steps:
       - name: Install System Deps
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm git nodejs npm pnpm go base-devel libpcap pkgconf ${{ matrix.cross_pkg }}
+          pacman -S --noconfirm git nodejs npm pnpm go base-devel pkgconf
           if [ "${{ matrix.goarch }}" == "arm64" ]; then
-            echo "Note: Arch cross-compiling might need specific aarch64 libpcap"
+            echo -e "\n[alcasa-aarch64]\nSigLevel = Optional TrustAll\nServer = https://github.com/nishtahir/alcasa/releases/download/aarch64" >> /etc/pacman.conf
+            pacman -Sy --noconfirm
           fi
+          pacman -S --noconfirm ${{ matrix.cross_pkg }}
 
       - name: Clone All Sources
         run: |
           git clone --depth 1 https://github.com/daeuniverse/daed.git source-daed
-          git clone --depth 1 https://github.com/daeuniverse/dae-wing.git source-wing
+          git clone --depth 1 https://github.com/dauniverse/dae-wing.git source-wing
           git clone --branch optimize/code-quality-fixes --depth 1 https://github.com/olicesx/dae.git source-patch
           rm -rf source-daed/wing
           cp -r source-wing source-daed/wing
@@ -71,7 +73,7 @@ jobs:
           pnpm build
           cd ../..
           mkdir -p source-daed/wing/internal/webdist/dist
-          cp -r source-daed/apps/web/dist/* source-daed/wing/internal/webdist/dist/
+          cp -r source-daed/apps/web/dist/. source-daed/wing/internal/webdist/dist/
 
       - name: Build Binary
         env:
@@ -79,6 +81,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
+          PKG_CONFIG_PATH: ${{ matrix.goarch == 'arm64' && '/usr/aarch64-linux-gnu/lib/pkgconfig' || '/usr/lib/pkgconfig' }}
           PATCH_SHA: ${{ needs.check.outputs.patch_sha }}
         run: |
           cd source-daed
@@ -92,7 +95,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.arch_name }}
-          path: source-daed/daed-${{ matrix.arch_name }}
+          path: daed-${{ matrix.arch_name }}
 
   release:
     needs: [check, build]
