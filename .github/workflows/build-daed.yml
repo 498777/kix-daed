@@ -102,4 +102,19 @@ jobs:
         with:
           tag_name: ${{ steps.check.outputs.tag }}
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          files
+          files: daed-linux-*
+          body: |
+            Core: `${{ steps.check.outputs.core_id }}`
+            Optimized Build.
+
+  prune:
+    runs-on: ubuntu-latest
+    needs: check-and-build
+    steps:
+      - name: Prune
+        uses: dev-drprasad/delete-older-releases@v0.2.1
+        with:
+          keep_latest: 1
+          delete_older_than: 3d
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
