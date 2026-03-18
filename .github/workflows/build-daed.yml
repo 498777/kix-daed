@@ -18,15 +18,10 @@ jobs:
         run: |
           UPSTREAM_DATA=$(curl -s "https://api.github.com/repos/olicesx/dae/branches/optimize/code-quality-fixes")
           UPSTREAM_COMMIT=$(echo "$UPSTREAM_DATA" | jq -r .commit.sha)
-          
-          if [ "$UPSTREAM_COMMIT" == "null" ]; then
-            exit 1
-          fi
-          
+          if [ "$UPSTREAM_COMMIT" == "null" ]; then exit 1; fi
           SHORT_COMMIT=${UPSTREAM_COMMIT:0:7}
           LOCAL_TAG=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r .tag_name)
           LAST_COMMIT=$(echo "$LOCAL_TAG" | cut -d'_' -f2)
-
           if [ "$SHORT_COMMIT" != "$LAST_COMMIT" ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
             echo "commit=$UPSTREAM_COMMIT" >> $GITHUB_OUTPUT
@@ -74,10 +69,19 @@ jobs:
         with:
           version: 8
 
-      - name: Web
+      - name: Web Build
         run: |
           pnpm install --no-frozen-lockfile
-          make dist
+          if [ -d "apps/web" ]; then
+            cd apps/web
+            pnpm install --no-frozen-lockfile
+            pnpm build
+            cd ../..
+            mkdir -p dist
+            cp -r apps/web/dist/* ./dist/ 2>/dev/null || cp -r apps/web/build/* ./dist/ 2>/dev/null
+          elif grep -q "^dist:" Makefile 2>/dev/null; then
+            make dist
+          fi
         env:
           TURBO_TELEMETRY_DISABLED: 1
           DO_NOT_TRACK: 1
@@ -86,7 +90,8 @@ jobs:
         run: |
           export GOOS=linux
           export GOARCH=${{ matrix.arch }}
-          make daed OUTPUT=daed-${{ matrix.arch }} VERSION=${{ needs.check.outputs.short_commit }}
+          make daed OUTPUT=daed-${{ matrix.arch }} VERSION=${{ needs.check.outputs.short_commit }} || \
+          (cd wing && make bundle OUTPUT=../daed-${{ matrix.arch }} VERSION=${{ needs.check.outputs.short_commit }} WEB_DIST=../dist)
 
       - name: Release
         uses: softprops/action-gh-release@v2
