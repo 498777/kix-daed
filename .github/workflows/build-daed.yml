@@ -41,9 +41,11 @@ jobs:
           - goarch: amd64
             arch_name: x86_64
             gcc_pkg: gcc-multilib
+            libpcap_arch: amd64
           - goarch: arm64
             arch_name: aarch64
             gcc_pkg: gcc-aarch64-linux-gnu
+            libpcap_arch: arm64
     steps:
       - name: Clone Source
         run: |
@@ -66,16 +68,23 @@ jobs:
           go-version: '1.22'
           cache: true
 
-      - name: Install Deps
+      - name: Install Cross-Compile Deps
         run: |
+          sudo dpkg --add-architecture arm64
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential libpcap-dev ${{ matrix.gcc_pkg }}
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential \
+            ${{ matrix.gcc_pkg }} \
+            libpcap-dev:${{ matrix.libpcap_arch }}
 
       - name: Build Web
         run: |
           cd source-daed
           pnpm install --no-frozen-lockfile
-          pnpm --filter "./apps/web..." build
+          pnpm --filter "./packages/**" build || true
+          cd apps/web
+          pnpm build
+          cd ../..
           mkdir -p wing/internal/webdist/dist
           cp -r apps/web/dist/* wing/internal/webdist/dist/
 
@@ -85,6 +94,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
+          PKG_CONFIG_PATH: /usr/lib/${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu' || 'x86_64-linux-gnu' }}/pkgconfig
           PATCH_SHA: ${{ needs.check.outputs.patch_sha }}
         run: |
           cd source-daed
