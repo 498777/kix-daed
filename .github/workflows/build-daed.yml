@@ -74,9 +74,8 @@ jobs:
       - name: Build Web
         run: |
           cd source-daed/apps/web
-          pnpm install
+          pnpm install --no-frozen-lockfile
           pnpm build
-          # 将静态资源移动到 Go 编译能识别的 wing 资源目录
           mkdir -p ../../wing/internal/webdist/dist
           cp -r dist/* ../../wing/internal/webdist/dist/
 
@@ -88,10 +87,9 @@ jobs:
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
           PATCH_SHA: ${{ needs.check.outputs.patch_sha }}
         run: |
-          # 进入包含 wing 逻辑的主目录进行编译
           cd source-daed
+          go mod edit -replace github.com/daeuniverse/dae=${{ github.workspace }}/source-patch
           go mod tidy
-          # 使用 webdist 标签将刚才复制的静态资源嵌入二进制
           go build -v -trimpath -tags webdist \
             -ldflags "-s -w -X github.com/daeuniverse/daed/wing/internal/version.Version=$PATCH_SHA" \
             -o ${{ github.workspace }}/daed-${{ matrix.arch_name }} ./wing/main.go
