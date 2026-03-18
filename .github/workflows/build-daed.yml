@@ -50,9 +50,13 @@ jobs:
         run: |
           IPK_FILE=$(find bin/packages/${{ matrix.arch }}/packages_ci/ -name "daed_*.ipk" | grep -v "luci" | head -n 1)
           if [ -f "$IPK_FILE" ]; then
-            tar -zxf "$IPK_FILE" -O data.tar.gz | tar -zxf - --strip-components=3 ./usr/bin/daed
-            chmod +x daed
-            mv daed daed-${{ matrix.arch }}
+            tar -zxf "$IPK_FILE" -O data.tar.gz | tar -zxf - --wildcards --strip-components=2 "*bin/daed"
+            if [ -f "daed" ]; then
+              chmod +x daed
+              mv daed daed-${{ matrix.arch }}
+            else
+              exit 1
+            fi
           else
             exit 1
           fi
