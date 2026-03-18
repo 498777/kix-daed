@@ -110,7 +110,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
 
       - name: Cleanup Workflow Runs
-        run: |
-          gh run delete --workflow build-daed.yml --created "<$(date -d '3 days ago' +%Y-%m-%d)" --confirm
         env:
           GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+        run: |
+          gh run delete --workflow "Build and Release daed" --created "<$(date -d '3 days ago' +%Y-%m-%d)" --confirm || true
