@@ -45,4 +45,36 @@ jobs:
           echo "version=$latest_commit-wing_$latest_wing_commit-core_$latest_core_commit" >> "$GITHUB_ENV"
 
       - name: Building packages
-        uses:
+        uses: sbwml/openwrt-gh-action-sdk@go1.26
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
+          FEEDNAME: packages_ci
+          PACKAGES: luci-app-daed
+          NO_REFRESH_CHECK: true
+          V: s
+
+      - name: Extract daed binary
+        run: |
+          mkdir -p ./out
+          find bin/packages/${{ matrix.arch }}/packages_ci/ -name "daed*.ipk" -exec tar -zxf {} -C ./out \;
+          cd ./out
+          [ -f "data.tar.gz" ] && tar -zxf data.tar.gz || tar -Jxf data.tar.xz
+          cp usr/bin/daed ../daed-${{ matrix.arch }}
+          cd ..
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@main
+        with:
+          name: daed-${{ matrix.arch }}
+          path: daed-${{ matrix.arch }}
+
+      - name: Upload packages
+        uses: ncipollo/release-action@v1
+        with:
+          name: daed_${{ env.version }}
+          allowUpdates: true
+          tag: daed_${{ env.version }}
+          commit: main
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          replacesArtifacts: true
+          artifacts: "daed-${{ matrix.arch }}"
