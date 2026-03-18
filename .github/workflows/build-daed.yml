@@ -49,15 +49,15 @@ jobs:
       - name: Install System Deps
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm git nodejs npm pnpm go base-devel pkgconf wget ${{ matrix.cross_pkg }}
+          pacman -S --noconfirm git nodejs npm pnpm go base-devel pkgconf flex bison ${{ matrix.cross_pkg }}
           
           if [ "${{ matrix.goarch }}" == "arm64" ]; then
-            mkdir -p /opt/aarch64-pcap
-            cd /opt/aarch64-pcap
-            wget http://mirror.archlinuxarm.org/aarch64/core/libpcap-1.10.5-1-aarch64.pkg.tar.xz
-            tar -xf libpcap-1.10.5-1-aarch64.pkg.tar.xz
-            cp -r usr/include/* /usr/aarch64-linux-gnu/include/
-            cp -r usr/lib/*.so* /usr/aarch64-linux-gnu/lib/
+            git clone --depth 1 https://github.com/the-tcpdump-group/libpcap.git /tmp/libpcap
+            cd /tmp/libpcap
+            export CC=aarch64-linux-gnu-gcc
+            ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu --with-pcap=linux
+            make -j$(nproc)
+            make install
           fi
 
       - name: Clone All Sources
@@ -85,8 +85,6 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
-          CGO_CFLAGS: ${{ matrix.goarch == 'arm64' && '-I/usr/aarch64-linux-gnu/include' || '' }}
-          CGO_LDFLAGS: ${{ matrix.goarch == 'arm64' && '-L/usr/aarch64-linux-gnu/lib' || '' }}
           PATCH_SHA: ${{ needs.check.outputs.patch_sha }}
         run: |
           cd source-daed
