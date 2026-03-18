@@ -13,14 +13,19 @@ jobs:
   check:
     runs-on: ubuntu-latest
     outputs:
-      should_build: ${{ steps.check_release.outputs.should_build }}
+      should_build: ${{ steps.get_sha.outputs.should_build }}
+      patch_sha: ${{ steps.get_sha.outputs.patch_sha }}
     steps:
-      - name: Check if Release exists
-        id: check_release
+      - name: Get Remote Patch SHA
+        id: get_sha
         env:
           GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
         run: |
-          TAG_NAME="kix-daed_a4da3e0"
+          FULL_SHA=$(git ls-remote https://github.com/olicesx/dae.git optimize/code-quality-fixes | awk '{print $1}')
+          SHORT_SHA=${FULL_SHA:0:7}
+          echo "patch_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          
+          TAG_NAME="kix-daed_$SHORT_SHA"
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             echo "should_build=false" >> $GITHUB_OUTPUT
           else
@@ -70,30 +75,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libpcap-dev ${{ matrix.gcc_pkg }}
 
-      - name: Patch & Build
+      - name: Build Web
+        run: |
+          cd daed/apps/web
+          pnpm install
+          pnpm build
+          mkdir -p ../../../dist
+          cp -r dist/* ../../../dist/
+
+      - name: Patch & Build Wing
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
+          PATCH_SHA: ${{ needs.check.outputs.patch_sha }}
         run: |
-          WEB_DIR=$(find . -name "package.json" -not -path "*/node_modules/*" -exec dirname {} \; | head -n 1)
-          cd "$WEB_DIR"
-          pnpm install
-          pnpm build
-          cd ${{ github.workspace }}
-          
-          WING_DIR=$(find . -name "go.mod" -not -path "*/vendor/*" -exec dirname {} \; | head -n 1)
-          cd "$WING_DIR"
+          cd dae-wing
           git remote add patch_repo https://github.com/olicesx/dae.git || true
           git fetch patch_repo optimize/code-quality-fixes
-          git checkout a4da3e0053eb574a9f68c9bdf40d16a02d97f57f
+          git checkout $PATCH_SHA
           
           go mod tidy
-          [ -f Makefile ] && make deps || true
+          [ -f Makefile ] && (make deps || true)
           
-          MAIN_PATH=$(find . -name "main.go" | head -n 1)
-          go build -v -trimpath -ldflags "-s -w -X github.com/daeuniverse/daed/wing/internal/version.Version=a4da3e0" -o ${{ github.workspace }}/daed-${{ matrix.arch_name }} "$MAIN_PATH"
+          go build -v -trimpath -tags webdist -ldflags "-s -w -X github.com/daeuniverse/daed/wing/internal/version.Version=$PATCH_SHA" -o ${{ github.workspace }}/daed-${{ matrix.arch_name }} ./main.go
           
           cd ${{ github.workspace }}
           ls -lh daed-${{ matrix.arch_name }}
@@ -105,7 +111,7 @@ jobs:
           path: daed-${{ matrix.arch_name }}
 
   release:
-    needs: build
+    needs: [check, build]
     runs-on: ubuntu-latest
     steps:
       - name: Download Artifacts
@@ -117,8 +123,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          tag_name: kix-daed_a4da3e0
-          name: Release kix-daed_a4da3e0
+          tag_name: kix-daed_${{ needs.check.outputs.patch_sha }}
+          name: Release kix-daed_${{ needs.check.outputs.patch_sha }}
           files: ./artifacts/binary-*/*
 
   cleanup:
@@ -132,5 +138,8 @@ jobs:
         run: |
           gh release list --limit 100 | grep "kix-daed_" | tail -n +4 | awk '{print $1}' | xargs -I {} gh release delete {} --yes --cleanup-tag || true
           
-          CUTOFF=$(date -d '1 days ago' +%Y-%m-%d)
-          gh run delete --all --created "<$CUTOFF" --confirm || true
+          CUTOFF=$(date -d '3 days ago' -u +%Y-%m-%dT%H:%M:%SZ)
+          RUNS=$(gh run list --limit 100 --json databaseId,createdAt -q ".[] | select(.createdAt < \"$CUTOFF\") | .databaseId")
+          for run_id in $RUNS; do
+            gh run delete "$run_id" || true
+          done
