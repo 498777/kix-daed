@@ -39,6 +39,7 @@ jobs:
 
       - name: Patch dae-core
         run: |
+          # 确保进入正确的子模块目录进行补丁
           cd wing
           git remote add upstream https://github.com/daeuniverse/dae.git || true
           git fetch upstream pull/936/head:patch-dns
