@@ -1,79 +1,94 @@
-name: Build daed Binary
+name: Build and Release daed
 
 on:
+  schedule:
+    - cron: '*/30 * * * *'
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
       matrix:
-        arch:
-          - aarch64_generic    
-          - x86_64
-        sdk:
-          - openwrt-24.10
-
+        include:
+          - { goarch: amd64, arch_name: x86_64 }
+          - { goarch: arm64, arch_name: aarch64 }
+    
     steps:
-      - uses: actions/checkout@main
+      - name: Checkout Code
+        uses: actions/checkout: v4
         with:
+          submodules: recursive
           fetch-depth: 0
-
-      - name: Init build dependencies
-        run: |
-          sudo swapoff -a
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install clang llvm npm jq
-          sudo npm install -g pnpm n
-          sudo n stable
-          latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
-          echo "version=$latest_commit" >> "$GITHUB_ENV"
-
-      - name: Patch Makefile
-        run: |
-          sed -i 's/PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=skip/' daed/Makefile
-          sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/' daed/Makefile
-
-      - name: Building daed only
-        uses: sbwml/openwrt-gh-action-sdk@go1.26
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEEDNAME: packages_ci
-          PACKAGES: daed
-          NO_REFRESH_CHECK: true
-          PRE_BUILD_SCRIPT: |
-            mkdir -p feeds/packages_ci
-            cp -rf $GITHUB_WORKSPACE/daed feeds/packages_ci/
-          V: s
-
-      - name: Extract and chmod binary
-        run: |
-          IPK_FILE=$(find bin/packages/${{ matrix.arch }}/packages_ci/ -name "daed_*.ipk" | grep -v "luci" | head -n 1)
-          if [ -f "$IPK_FILE" ]; then
-            tar -zxf "$IPK_FILE" -O data.tar.gz | tar -zxf - --wildcards --strip-components=2 "*bin/daed"
-            if [ -f "daed" ]; then
-              chmod +x daed
-              mv daed daed-${{ matrix.arch }}
-            else
-              exit 1
-            fi
-          else
-            exit 1
-          fi
-
-      - name: Upload Release Assets
-        uses: ncipollo/release-action@v1
-        with:
-          name: daed_${{ env.version }}
-          allowUpdates: true
-          tag: daed_${{ env.version }}
-          commit: main
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          replacesArtifacts: true
-          artifacts: "daed-${{ matrix.arch }}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install Dependencies
+        run: |
+          npm install -g pnpm
+          sudo apt-get update && sudo apt-get install -y build-essential libpcap-dev
+
+      - name: Patch dae-core
+        run: |
+          cd wing
+          git remote add upstream https://github.com/daeuniverse/dae.git || true
+          git fetch upstream pull/936/head:patch-dns
+          git checkout patch-dns
+          cd ..
+
+      - name: Build Web
+        run: make dist
+
+      - name: Build Binary
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+        run: |
+          make daed VERSION=${{ github.sha }} OUTPUT=daed-linux-${{ matrix.arch_name }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: daed-${{ matrix.arch_name }}
+          path: daed-linux-${{ matrix.arch_name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          tag_name: kix-daed_${{ github.sha }}
+          name: Release kix-daed_${{ github.sha }}
+          files: |
+            daed-x86_64/daed-linux-x86_64
+            daed-aarch64/daed-linux-aarch64
+
+  cleanup:
+    needs: release
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cleanup Old Releases
+        uses: dev-drprasad/delete-older-releases@v0.3.3
+        with:
+          keep_latest: 3
+          delete_expired_data: 3 days
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
