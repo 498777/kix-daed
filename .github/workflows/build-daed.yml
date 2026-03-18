@@ -35,7 +35,7 @@ jobs:
           latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
           echo "version=$latest_commit" >> "$GITHUB_ENV"
 
-      - name: Patch Makefile before Build
+      - name: Patch Makefile
         run: |
           sed -i 's/PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=skip/' daed/Makefile
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/' daed/Makefile
@@ -47,6 +47,9 @@ jobs:
           FEEDNAME: packages_ci
           PACKAGES: daed
           NO_REFRESH_CHECK: true
+          PRE_BUILD_SCRIPT: |
+            mkdir -p feeds/packages_ci
+            cp -rf $GITHUB_WORKSPACE/daed feeds/packages_ci/
           V: s
 
       - name: Extract and chmod binary
