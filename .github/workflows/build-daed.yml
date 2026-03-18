@@ -1,4 +1,4 @@
-name: Build and Release daed
+name: Build and Release daed (Arch)
 
 on:
   schedule:
@@ -34,19 +34,26 @@ jobs:
     needs: check
     if: needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    container:
+      image: archlinux:latest
     strategy:
       matrix:
         include:
           - goarch: amd64
             arch_name: x86_64
-            gcc_pkg: gcc-multilib
-            libpcap_arch: amd64
+            cross_pkg: gcc
           - goarch: arm64
             arch_name: aarch64
-            gcc_pkg: gcc-aarch64-linux-gnu
-            libpcap_arch: arm64
+            cross_pkg: aarch64-linux-gnu-gcc aarch64-linux-gnu-binutils
     steps:
+      - name: Install System Deps
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm git nodejs npm pnpm go base-devel libpcap pkgconf ${{ matrix.cross_pkg }}
+          if [ "${{ matrix.goarch }}" == "arm64" ]; then
+            echo "Note: Arch cross-compiling might need specific aarch64 libpcap"
+          fi
+
       - name: Clone All Sources
         run: |
           git clone --depth 1 https://github.com/daeuniverse/daed.git source-daed
@@ -54,37 +61,6 @@ jobs:
           git clone --branch optimize/code-quality-fixes --depth 1 https://github.com/olicesx/dae.git source-patch
           rm -rf source-daed/wing
           cp -r source-wing source-daed/wing
-
-      - name: Setup Environment
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      
-      - name: Setup PNPM
-        uses: pnpm/action-setup@v3
-        with:
-          version: 9
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-          cache: true
-
-      - name: Install Cross-Compile Deps
-        run: |
-          sudo dpkg --add-architecture arm64
-          # 修正软件源：将 arm64 的源指向 ports.ubuntu.com
-          sudo sed -i 's/deb http/deb [arch=amd64] http/g' /etc/apt/sources.list.d/*.list /etc/apt/sources.list || true
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs) main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs)-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs)-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-          
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential \
-            ${{ matrix.gcc_pkg }} \
-            libpcap-dev:${{ matrix.libpcap_arch }}
 
       - name: Build Web
         run: |
@@ -112,11 +88,11 @@ jobs:
             -ldflags "-s -w -X github.com/daeuniverse/daed/wing/internal/version.Version=$PATCH_SHA" \
             -o ${{ github.workspace }}/daed-${{ matrix.arch_name }} ./wing/main.go
 
-      - name: Upload
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.arch_name }}
-          path: daed-${{ matrix.arch_name }}
+          path: source-daed/daed-${{ matrix.arch_name }}
 
   release:
     needs: [check, build]
