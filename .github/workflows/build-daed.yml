@@ -52,7 +52,6 @@ jobs:
           pacman -S --noconfirm git nodejs npm pnpm go base-devel pkgconf flex bison autoconf automake ${{ matrix.cross_pkg }}
           
           if [ "${{ matrix.goarch }}" == "arm64" ]; then
-            # 1. 交叉编译 libnl
             git clone --depth 1 https://github.com/thom311/libnl.git /tmp/libnl
             cd /tmp/libnl
             sh autogen.sh
@@ -60,7 +59,6 @@ jobs:
             make -j$(nproc)
             make install
             
-            # 2. 交叉编译 libpcap (此时已经能找到 libnl)
             git clone --depth 1 https://github.com/the-tcpdump-group/libpcap.git /tmp/libpcap
             cd /tmp/libpcap
             sh autogen.sh
@@ -69,10 +67,7 @@ jobs:
             ./configure --host=aarch64-linux-gnu \
                         --prefix=/usr/aarch64-linux-gnu \
                         --with-pcap=linux \
-                        --with-libnl \
-                        --disable-dbus \
-                        --disable-bluetooth \
-                        --disable-rdma
+                        --with-libnl
             make -j$(nproc)
             make install
           fi
@@ -89,7 +84,8 @@ jobs:
         run: |
           cd source-daed
           pnpm install --no-frozen-lockfile
-          pnpm --filter "./packages/**" build || true
+          find packages/dae-lsp -name "package.json" -exec sed -i 's/tsdown/tsdown --inlineOnly false/g' {} +
+          pnpm --filter "./packages/**" build || echo "Packages build warning, continuing..."
           cd apps/web
           pnpm build
           cd ../..
