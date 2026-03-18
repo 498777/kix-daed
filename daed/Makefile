@@ -1,117 +1,64 @@
-name: Build and Release daed
+OUTPUT ?= daed
+APPNAME ?= daed
+VERSION ?= 0.0.0.unknown
 
-on:
-  schedule:
-    - cron: '*/30 * * * *'
-  workflow_dispatch:
+.PHONY: submodules submodule
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+daed:
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goarch: amd64
-            arch_name: x86_64
-            gcc_pkg: gcc-multilib
-          - goarch: arm64
-            arch_name: aarch64
-            gcc_pkg: gcc-aarch64-linux-gnu
-    outputs:
-      short_sha: ${{ steps.vars.outputs.short_sha }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+all: clean daed
 
-      - name: Set Short SHA
-        id: vars
-        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+clean:
+	rm -rf dist && rm -rf apps/web/dist && rm -f daed
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+## Begin Git Submodules
+.gitmodules.d.mk: .gitmodules Makefile
+	@set -e && \
+	submodules=$$(grep '\[submodule "' .gitmodules | cut -d'"' -f2 | tr '\n' ' ' | tr ' \n' '\n' | sed 's/$$/\/.git/g') && \
+	echo "submodule_ready=$${submodules}" > $@
 
-      - name: Setup PNPM
-        uses: pnpm/action-setup@v3
-        with:
-          version: 9
-          run_install: false
+-include .gitmodules.d.mk
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-          cache: true
+$(submodule_ready): .gitmodules.d.mk
+ifdef SKIP_SUBMODULES
+	@echo "Skipping submodule update"
+else
+	git submodule update --init --recursive -- "$$(dirname $@)" && \
+	touch $@
+endif
 
-      - name: Install System Deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libpcap-dev ${{ matrix.gcc_pkg }}
+submodule submodules: $(submodule_ready)
+	@if [ -z "$(submodule_ready)" ]; then \
+		rm -f .gitmodules.d.mk; \
+		echo "Failed to generate submodules list. Please try again."; \
+		exit 1; \
+	fi
+## End Git Submodules
 
-      - name: Patch dae-core
-        run: |
-          if [ -d "wing" ]; then
-            cd wing
-            git remote add patch_repo https://github.com/olicesx/dae.git || true
-            git fetch patch_repo optimize/code-quality-fixes
-            git checkout patch_repo/optimize/code-quality-fixes
-            cd ..
-          fi
+## Begin Web
+PFLAGS ?=
+ifeq (,$(wildcard ./.git))
+	PFLAGS += HUSKY=0
+endif
+dist: package.json pnpm-lock.yaml
+	$(PFLAGS) pnpm i
+	TURBO_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1 pnpm build
+	@if [ -d "apps/web/dist" ]; then \
+		rm -rf dist; \
+		cp -r apps/web/dist dist; \
+	fi
+## End Web
 
-      - name: Build Binary
-        env:
-          GOOS: linux
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
-          CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
-          SKIP_SUBMODULES: 1
-        run: |
-          make daed VERSION=${{ steps.vars.outputs.short_sha }} OUTPUT=daed-${{ matrix.arch_name }}
+## Begin Bundle
+DAE_WING_READY=wing/graphql/service/config/global/generated_resolver.go
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: daed-${{ matrix.arch_name }}
-          path: daed-${{ matrix.arch_name }}
+$(DAE_WING_READY): wing
+	cd wing && \
+	$(MAKE) deps && \
+	cd .. && \
+	touch $@
 
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          tag_name: kix-daed_${{ needs.build.outputs.short_sha }}
-          name: Release kix-daed_${{ needs.build.outputs.short_sha }}
-          files: |
-            daed-x86_64/daed-x86_64
-            daed-aarch64/daed-aarch64
-
-  cleanup:
-    needs: release
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Cleanup All
-        env:
-          GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-        run: |
-          gh release list --limit 100 | grep "kix-daed_" | tail -n +4 | awk '{print $1}' | xargs -I {} gh release delete {} --yes --cleanup-tag || true
-          
-          CUTOFF=$(date -d '3 days ago' +%Y-%m-%d)
-          for wf in $(gh workflow list --json id -q '.[].id'); do
-            gh run delete --workflow "$wf" --created "<$CUTOFF" --confirm || true
-          done
+daed: submodule $(DAE_WING_READY) dist
+	cd wing && \
+	$(MAKE) OUTPUT=../$(OUTPUT) APPNAME=$(APPNAME) WEB_DIST=../dist VERSION=$(VERSION) bundle
+## End Bundle
