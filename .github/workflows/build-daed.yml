@@ -1,4 +1,4 @@
-name: Build daed (Kix Edition - Optimized)
+name: Build daed (Kix Edition - Dockerized Core Swap)
 
 on:
   schedule:
@@ -29,65 +29,68 @@ jobs:
   build:
     needs: check-update
     if: needs.check-update.outputs.should_build == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
           - arch: x86_64
-            goarch: amd64
+            platform: linux/amd64
           - arch: aarch64
-            goarch: arm64
+            platform: linux/arm64
     steps:
-      - name: System Dependencies
+      - name: Checkout daed
+        run: git clone --recursive https://github.com/daeuniverse/daed.git .
+
+      - name: Swap Core Source
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang llvm libelf-dev gcc-aarch64-linux-gnu pkg-config libssl-dev build-essential
-          sudo npm install -g pnpm
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-
-      - name: Clone Components
-        run: |
-          git clone --recursive https://github.com/daeuniverse/daed.git .
           rm -rf wing/dae-core
           git clone https://github.com/olicesx/dae.git wing/dae-core
 
-      - name: Build Frontend
-        env:
-          NODE_OPTIONS: "--max_old_space_size=4096"
-        run: |
-          pnpm install
-          pnpm build --filter daed || echo "Frontend build exited with warnings, checking assets..."
-          
-          if [ -d "apps/web/dist" ] && [ "$(ls -A apps/web/dist)" ]; then
-            mkdir -p wing/webrender/web
-            cp -rf apps/web/dist/* wing/webrender/web/
-          else
-            exit 1
-          fi
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Compile Backend
-        env:
-          CGO_ENABLED: 1
-          GOOS: linux
-          GOARCH: ${{ matrix.goarch }}
-          CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create Custom Dockerfile
         run: |
-          cd wing
-          go generate ./...
-          go build -v -o ../daed-${{ matrix.arch }} \
-            -trimpath \
-            -ldflags "-s -w -X 'github.com/daeuniverse/dae-wing/db.AppVersion=kix-${{ needs.check-update.outputs.short_sha }}' -linkmode external -extldflags '-static'" \
-            -tags "embedallowed,trace" \
-            ./main.go
+          cat <<EOF > Dockerfile.kix
+          FROM node:20-alpine AS build-web
+          WORKDIR /build
+          COPY . .
+          RUN corepack enable && corepack prepare pnpm@latest --activate
+          RUN pnpm install
+          RUN NODE_OPTIONS='--max_old_space_size=4096' pnpm --filter daed build
+
+          FROM golang:1.23-bookworm AS build-bundle
+          RUN apt-get update && apt-get install -y git make llvm clang libelf-dev build-essential
+          WORKDIR /build
+          COPY --from=build-web /build/apps/web/dist /build/web
+          COPY . .
+          WORKDIR /build/wing
+          RUN go generate ./...
+          RUN go build -v -o /build/daed-bin \
+              -trimpath \
+              -ldflags "-s -w -X 'github.com/daeuniverse/dae-wing/db.AppVersion=kix-${{ needs.check-update.outputs.short_sha }}' -extldflags '-static'" \
+              -tags "embedallowed,trace" \
+              ./main.go
+
+          FROM scratch
+          COPY --from=build-bundle /build/daed-bin /daed-bin
+          EOF
+
+      - name: Build with Docker
+        run: |
+          mkdir -p ./output
+          docker buildx build --platform ${{ matrix.platform }} \
+            -f Dockerfile.kix \
+            -t daed-temp:${{ matrix.arch }} \
+            --output type=local,dest=./output .
+
+      - name: Prepare Artifact
+        run: |
+          mv ./output/daed-bin ./daed-${{ matrix.arch }}
+          chmod +x ./daed-${{ matrix.arch }}
 
       - name: Upload to Release
         uses: ncipollo/release-action@v1
