@@ -1,114 +1,78 @@
-name: Build daed (Kix Edition - Dockerized Core Swap)
+name: Build packages daed
 
 on:
-  schedule:
-    - cron: '*/30 * * * *'
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-  check-update:
-    runs-on: ubuntu-latest
-    outputs:
-      should_build: ${{ steps.check.outputs.changed }}
-      short_sha: ${{ steps.check.outputs.short_sha }}
-    steps:
-      - name: Check for New Commits
-        id: check
-        run: |
-          LATEST_SHA=$(curl -s https://api.github.com/repos/olicesx/dae/commits/main | jq -r '.sha')
-          SHORT_SHA=${LATEST_SHA:0:7}
-          LAST_TAG=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r '.tag_name' || echo "none")
-          
-          if [[ "$LAST_TAG" != "kix-daed_$SHORT_SHA" ]]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
-          else
-            echo "changed=false" >> $GITHUB_OUTPUT
-          fi
-
   build:
-    needs: check-update
-    if: needs.check-update.outputs.should_build == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
+    runs-on: ubuntu-22.04
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          - arch: x86_64
-            platform: linux/amd64
-          - arch: aarch64
-            platform: linux/arm64
+        arch:
+          - aarch64_generic    
+          - x86_64
+        sdk:
+          - openwrt-24.10
+
     steps:
-      - name: Checkout daed
-        run: git clone --recursive https://github.com/daeuniverse/daed.git .
+      - uses: actions/checkout@main
+        with:
+          fetch-depth: 0
 
-      - name: Swap Core Source
+      - name: Get node-empty
         run: |
-          rm -rf wing/dae-core
-          git clone https://github.com/olicesx/dae.git wing/dae-core
+          git clone https://github.com/sbwml/node-empty
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Create Custom Dockerfile
+      - name: Init build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          cat <<EOF > Dockerfile.kix
-          FROM node:20-alpine AS build-web
-          WORKDIR /build
-          COPY . .
-          RUN corepack enable && corepack prepare pnpm@latest --activate
-          RUN pnpm install
-          RUN NODE_OPTIONS='--max_old_space_size=4096' pnpm --filter daed build
+          sudo swapoff -a
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install clang llvm npm jq
+          sudo npm install -g pnpm
+          sudo npm install -g n
+          sudo npm i taze -g
+          sudo n stable
+          latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
+          latest_wing_commit=$(grep "WING_VERSION:=wing-" daed/Makefile | sed 's/.*wing-//' | head -n 1)
+          latest_core_commit=$(grep "CORE_VERSION:=core-" daed/Makefile | sed 's/.*core-//' | head -n 1)
+          timestamp=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.author.date')
+          echo "version=$latest_commit-wing_$latest_wing_commit-core_$latest_core_commit" >> "$GITHUB_ENV"
 
-          FROM golang:1.23-bookworm AS build-bundle
-          RUN apt-get update && apt-get install -y git make llvm clang libelf-dev build-essential
-          WORKDIR /build
-          COPY --from=build-web /build/apps/web/dist /build/web
-          COPY . .
-          WORKDIR /build/wing
-          RUN go generate ./...
-          RUN go build -v -o /build/daed-bin \
-              -trimpath \
-              -ldflags "-s -w -X 'github.com/daeuniverse/dae-wing/db.AppVersion=kix-${{ needs.check-update.outputs.short_sha }}' -extldflags '-static'" \
-              -tags "embedallowed,trace" \
-              ./main.go
+      - name: Building packages
+        uses: sbwml/openwrt-gh-action-sdk@go1.26
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
+          FEEDNAME: packages_ci
+          PACKAGES: luci-app-daed
+          NO_REFRESH_CHECK: true
+          V: s
 
-          FROM scratch
-          COPY --from=build-bundle /build/daed-bin /daed-bin
-          EOF
-
-      - name: Build with Docker
+      - name: Prepare Binary
         run: |
-          mkdir -p ./output
-          docker buildx build --platform ${{ matrix.platform }} \
-            -f Dockerfile.kix \
-            -t daed-temp:${{ matrix.arch }} \
-            --output type=local,dest=./output .
+          mkdir -p release_assets
+          find bin/ -name "daed" -type f -executable -exec cp {} release_assets/daed-${{ matrix.arch }} \;
 
-      - name: Prepare Artifact
-        run: |
-          mv ./output/daed-bin ./daed-${{ matrix.arch }}
-          chmod +x ./daed-${{ matrix.arch }}
+      - name: Upload artifacts
+        uses: actions/upload-artifact@main
+        with:
+          name: daed-${{ matrix.arch }}
+          path: release_assets/daed-*
 
-      - name: Upload to Release
+      - name: Upload Release
         uses: ncipollo/release-action@v1
         with:
-          tag: kix-daed_${{ needs.check-update.outputs.short_sha }}
-          name: daed-kix-${{ needs.check-update.outputs.short_sha }}
+          name: daed_${{ env.version }}
           allowUpdates: true
-          artifacts: "daed-${{ matrix.arch }}"
+          tag: daed_${{ env.version }}
+          commit: main
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-
-  cleanup:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Remove Old Releases
-        uses: dev-drprasad/delete-older-releases@v0.3.3
-        with:
-          keep_latest: 3
-          delete_older_than: 24h
-        env:
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          replacesArtifacts: true
+          artifacts: "release_assets/daed-*"
