@@ -25,8 +25,7 @@ jobs:
           fetch-depth: 0
 
       - name: Get node-empty
-        run: |
-          git clone https://github.com/sbwml/node-empty
+        run: git clone https://github.com/sbwml/node-empty
 
       - name: Init build dependencies
         env:
@@ -36,14 +35,11 @@ jobs:
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo -E apt-get -qq update
           sudo -E apt-get -qq install clang llvm npm jq
-          sudo npm install -g pnpm
-          sudo npm install -g n
-          sudo npm i taze -g
+          sudo npm install -g pnpm n taze
           sudo n stable
           latest_commit=$(grep "DAED_VERSION:=daed-" daed/Makefile | sed 's/.*daed-//' | head -n 1)
           latest_wing_commit=$(grep "WING_VERSION:=wing-" daed/Makefile | sed 's/.*wing-//' | head -n 1)
           latest_core_commit=$(grep "CORE_VERSION:=core-" daed/Makefile | sed 's/.*core-//' | head -n 1)
-          timestamp=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.author.date')
           echo "version=$latest_commit-wing_$latest_wing_commit-core_$latest_core_commit" >> "$GITHUB_ENV"
 
       - name: Building packages
@@ -55,10 +51,19 @@ jobs:
           NO_REFRESH_CHECK: true
           V: s
 
-      - name: Prepare Binary
+      - name: Extract Binary from IPK
         run: |
           mkdir -p release_assets
-          find bin/ -name "daed" -type f -executable -exec cp {} release_assets/daed-${{ matrix.arch }} \;
+          IPK_FILE=$(find bin/ -name "daed_*.ipk" | head -n 1)
+          if [ -f "$IPK_FILE" ]; then
+            mkdir -p ./temp_extract
+            tar -xzf "$IPK_FILE" -C ./temp_extract
+            tar -xzf ./temp_extract/data.tar.gz -C ./temp_extract
+            find ./temp_extract -name "daed" -type f -executable -exec cp {} release_assets/daed-${{ matrix.arch }} \;
+          else
+            echo "IPK not found, check build logs."
+            exit 1
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@main
