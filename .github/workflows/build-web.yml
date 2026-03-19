@@ -103,4 +103,4 @@ jobs:
         with:
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           repository: ${{ github.repository }}
-          retain_days: 3
+          retain_days: 1
