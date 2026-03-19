@@ -54,14 +54,14 @@ jobs:
       - name: Extract Binary from IPK
         run: |
           mkdir -p release_assets
-          IPK_FILE=$(find bin/ -name "daed_*.ipk" | head -n 1)
+          IPK_FILE=$(find bin/ -name "daed_*.ipk" | grep -v "luci" | head -n 1)
           if [ -f "$IPK_FILE" ]; then
             mkdir -p ./temp_extract
             tar -xzf "$IPK_FILE" -C ./temp_extract
             tar -xzf ./temp_extract/data.tar.gz -C ./temp_extract
-            find ./temp_extract -name "daed" -type f -executable -exec cp {} release_assets/daed-${{ matrix.arch }} \;
+            [ -f ./temp_extract/usr/bin/daed ] && cp ./temp_extract/usr/bin/daed release_assets/daed-${{ matrix.arch }}
           else
-            echo "IPK not found, check build logs."
+            echo "Target IPK not found."
             exit 1
           fi
 
