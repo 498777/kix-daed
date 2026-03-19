@@ -1,9 +1,9 @@
-name: Build daed (Kix Edition)
+name: Build daed (Kix Edition - Optimized)
 
 on:
   schedule:
-    - cron: '*/30 * * * *' # 每 30 分钟运行一次
-  workflow_dispatch: # 支持手动点击运行
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
 
 jobs:
   check-update:
@@ -17,16 +17,12 @@ jobs:
         run: |
           LATEST_SHA=$(curl -s https://api.github.com/repos/olicesx/dae/commits/main | jq -r '.sha')
           SHORT_SHA=${LATEST_SHA:0:7}
-          
-          # 获取当前仓库最新的 Release Tag
           LAST_TAG=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r '.tag_name' || echo "none")
           
           if [[ "$LAST_TAG" != "kix-daed_$SHORT_SHA" ]]; then
-            echo "New commit found: $SHORT_SHA"
             echo "changed=true" >> $GITHUB_OUTPUT
             echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
           else
-            echo "No changes since last release."
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
@@ -45,28 +41,38 @@ jobs:
       - name: System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libelf-dev gcc-aarch64-linux-gnu npm
+          sudo apt-get install -y clang llvm libelf-dev gcc-aarch64-linux-gnu pkg-config libssl-dev build-essential
           sudo npm install -g pnpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23' # 对应 go.mod 中的 toolchain
+          go-version: '1.23'
 
       - name: Clone Components
         run: |
-          # 克隆外壳 daed
           git clone --recursive https://github.com/daeuniverse/daed.git .
-          # 替换 wing 中的 dae-core 为 olicesx 的定制版
           rm -rf wing/dae-core
           git clone https://github.com/olicesx/dae.git wing/dae-core
 
       - name: Build Frontend
+        env:
+          NODE_OPTIONS: "--max_old_space_size=4096"
         run: |
           pnpm install
           pnpm build --filter daed
-          mkdir -p wing/webrender/web
-          cp -rf apps/web/dist/* wing/webrender/web/
+          
+          if [ -d "apps/web/dist" ]; then
+            mkdir -p wing/webrender/web
+            cp -rf apps/web/dist/* wing/webrender/web/
+          else
+            exit 1
+          fi
 
       - name: Compile Backend
         env:
@@ -76,9 +82,7 @@ jobs:
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
         run: |
           cd wing
-          # 运行代码生成以处理 eBPF
           go generate ./...
-          # 构建静态二进制
           go build -v -o ../daed-${{ matrix.arch }} \
             -trimpath \
             -ldflags "-s -w -X 'github.com/daeuniverse/dae-wing/db.AppVersion=kix-${{ needs.check-update.outputs.short_sha }}' -linkmode external -extldflags '-static'" \
@@ -98,10 +102,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Remove Old Releases (Keep 24h)
+      - name: Remove Old Releases
         uses: dev-drprasad/delete-older-releases@v0.3.3
         with:
-          keep_latest: 3 # 至少保留最近3个，防止一天内多次更新被全部删掉
+          keep_latest: 3
           delete_older_than: 24h
         env:
           GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
