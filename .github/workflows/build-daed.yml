@@ -1,103 +1,107 @@
-name: Track Upstream and Release
+name: Build daed (Kix Edition)
 
 on:
   schedule:
-    - cron: '0 * * * *'
-  workflow_dispatch:
+    - cron: '*/30 * * * *' # 每 30 分钟运行一次
+  workflow_dispatch: # 支持手动点击运行
 
 jobs:
-  check:
+  check-update:
     runs-on: ubuntu-latest
     outputs:
       should_build: ${{ steps.check.outputs.changed }}
-      upstream_commit: ${{ steps.check.outputs.commit }}
-      short_commit: ${{ steps.check.outputs.short_commit }}
+      short_sha: ${{ steps.check.outputs.short_sha }}
     steps:
-      - name: Check Upstream
+      - name: Check for New Commits
         id: check
         run: |
-          UPSTREAM_DATA=$(curl -s "https://api.github.com/repos/olicesx/dae/branches/optimize/code-quality-fixes")
-          UPSTREAM_COMMIT=$(echo "$UPSTREAM_DATA" | jq -r .commit.sha)
-          if [ "$UPSTREAM_COMMIT" == "null" ]; then exit 1; fi
-          SHORT_COMMIT=${UPSTREAM_COMMIT:0:7}
-          LOCAL_TAG=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r .tag_name)
-          LAST_COMMIT=$(echo "$LOCAL_TAG" | cut -d'_' -f2)
-          if [ "$SHORT_COMMIT" != "$LAST_COMMIT" ]; then
+          LATEST_SHA=$(curl -s https://api.github.com/repos/olicesx/dae/commits/main | jq -r '.sha')
+          SHORT_SHA=${LATEST_SHA:0:7}
+          
+          # 获取当前仓库最新的 Release Tag
+          LAST_TAG=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r '.tag_name' || echo "none")
+          
+          if [[ "$LAST_TAG" != "kix-daed_$SHORT_SHA" ]]; then
+            echo "New commit found: $SHORT_SHA"
             echo "changed=true" >> $GITHUB_OUTPUT
-            echo "commit=$UPSTREAM_COMMIT" >> $GITHUB_OUTPUT
-            echo "short_commit=$SHORT_COMMIT" >> $GITHUB_OUTPUT
+            echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
           else
+            echo "No changes since last release."
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Cleanup
-        if: steps.check.outputs.changed == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-        run: |
-          gh run list --limit 100 --json databaseId,createdAt -q '.[] | select(.createdAt < (now - 86400 | strftime("%Y-%m-%dT%H:%M:%SZ"))) | .databaseId' | xargs -I {} gh run delete {}
-
   build:
-    needs: check
-    if: needs.check.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
+    needs: check-update
+    if: needs.check-update.outputs.should_build == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        include:
+          - arch: x86_64
+            goarch: amd64
+          - arch: aarch64
+            goarch: arm64
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          repository: olicesx/dae
-          ref: ${{ needs.check.outputs.upstream_commit }}
-          submodules: recursive
-          fetch-depth: 0
+      - name: System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev gcc-aarch64-linux-gnu npm
+          sudo npm install -g pnpm
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
-          cache: true
+          go-version: '1.23' # 对应 go.mod 中的 toolchain
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 8
-
-      - name: Web Build
+      - name: Clone Components
         run: |
-          pnpm install --no-frozen-lockfile
-          if [ -d "apps/web" ]; then
-            cd apps/web
-            pnpm install --no-frozen-lockfile
-            pnpm build
-            cd ../..
-            mkdir -p dist
-            cp -r apps/web/dist/* ./dist/ 2>/dev/null || cp -r apps/web/build/* ./dist/ 2>/dev/null
-          elif grep -q "^dist:" Makefile 2>/dev/null; then
-            make dist
-          fi
+          # 克隆外壳 daed
+          git clone --recursive https://github.com/daeuniverse/daed.git .
+          # 替换 wing 中的 dae-core 为 olicesx 的定制版
+          rm -rf wing/dae-core
+          git clone https://github.com/olicesx/dae.git wing/dae-core
+
+      - name: Build Frontend
+        run: |
+          pnpm install
+          pnpm build --filter daed
+          mkdir -p wing/webrender/web
+          cp -rf apps/web/dist/* wing/webrender/web/
+
+      - name: Compile Backend
         env:
-          TURBO_TELEMETRY_DISABLED: 1
-          DO_NOT_TRACK: 1
-
-      - name: Compile
+          CGO_ENABLED: 1
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
         run: |
-          export GOOS=linux
-          export GOARCH=${{ matrix.arch }}
-          make daed OUTPUT=daed-${{ matrix.arch }} VERSION=${{ needs.check.outputs.short_commit }} || \
-          (cd wing && make bundle OUTPUT=../daed-${{ matrix.arch }} VERSION=${{ needs.check.outputs.short_commit }} WEB_DIST=../dist)
+          cd wing
+          # 运行代码生成以处理 eBPF
+          go generate ./...
+          # 构建静态二进制
+          go build -v -o ../daed-${{ matrix.arch }} \
+            -trimpath \
+            -ldflags "-s -w -X 'github.com/daeuniverse/dae-wing/db.AppVersion=kix-${{ needs.check-update.outputs.short_sha }}' -linkmode external -extldflags '-static'" \
+            -tags "embedallowed,trace" \
+            ./main.go
 
-      - name: Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload to Release
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: kix-daed_${{ needs.check.outputs.short_commit }}
-          files: daed-${{ matrix.arch }}
+          tag: kix-daed_${{ needs.check-update.outputs.short_sha }}
+          name: daed-kix-${{ needs.check-update.outputs.short_sha }}
+          allowUpdates: true
+          artifacts: "daed-${{ matrix.arch }}"
           token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          generate_release_notes: true
-          append_body: true
+
+  cleanup:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove Old Releases (Keep 24h)
+        uses: dev-drprasad/delete-older-releases@v0.3.3
+        with:
+          keep_latest: 3 # 至少保留最近3个，防止一天内多次更新被全部删掉
+          delete_older_than: 24h
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
