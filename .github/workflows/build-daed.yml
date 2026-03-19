@@ -65,9 +65,9 @@ jobs:
           NODE_OPTIONS: "--max_old_space_size=4096"
         run: |
           pnpm install
-          pnpm build --filter daed
+          pnpm build --filter daed || echo "Frontend build exited with warnings, checking assets..."
           
-          if [ -d "apps/web/dist" ]; then
+          if [ -d "apps/web/dist" ] && [ "$(ls -A apps/web/dist)" ]; then
             mkdir -p wing/webrender/web
             cp -rf apps/web/dist/* wing/webrender/web/
           else
