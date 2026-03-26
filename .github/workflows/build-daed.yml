@@ -1,4 +1,4 @@
-name: Build packages daed
+name: Build daed (APK Extraction)
 
 on:
   workflow_dispatch:
@@ -6,21 +6,24 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         arch:
-          - aarch64_generic    
+          - aarch64_generic
           - x86_64
         sdk:
-          - openwrt-24.10
+          - openwrt-25.12
 
     steps:
-      - uses: actions/checkout@main
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -31,7 +34,7 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo swapoff -a
+          sudo swapoff -a || true
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo -E apt-get -qq update
           sudo -E apt-get -qq install clang llvm npm jq
@@ -51,22 +54,26 @@ jobs:
           NO_REFRESH_CHECK: true
           V: s
 
-      - name: Extract Binary from IPK
+      - name: Extract Binary from APK
+        shell: bash
         run: |
           mkdir -p release_assets
-          IPK_FILE=$(find bin/ -name "daed_*.ipk" | grep -v "luci" | head -n 1)
-          if [ -f "$IPK_FILE" ]; then
+          APK_FILE=$(find bin/packages/${{ matrix.arch }}/ -name "daed_*.apk" | grep -v "luci" | head -n 1)
+          if [ -f "$APK_FILE" ]; then
             mkdir -p ./temp_extract
-            tar -xzf "$IPK_FILE" -C ./temp_extract
-            tar -xzf ./temp_extract/data.tar.gz -C ./temp_extract
-            [ -f ./temp_extract/usr/bin/daed ] && cp ./temp_extract/usr/bin/daed release_assets/daed-${{ matrix.arch }}
+            tar -xzf "$APK_FILE" -C ./temp_extract
+            if [ -f "./temp_extract/usr/bin/daed" ]; then
+              cp ./temp_extract/usr/bin/daed release_assets/daed-${{ matrix.arch }}
+              chmod +x release_assets/daed-${{ matrix.arch }}
+            else
+              exit 1
+            fi
           else
-            echo "Target IPK not found."
             exit 1
           fi
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         with:
           name: daed-${{ matrix.arch }}
           path: release_assets/daed-*
