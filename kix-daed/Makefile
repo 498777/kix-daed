@@ -39,7 +39,7 @@ build-backend:
 	cd wing && CGO_ENABLED=0 go mod tidy
 	
 	@echo "==> 暴力修复 dae-core 源码中的 go:generate 变量..."
-	find wing/dae-core -name "*.go" -type f -print0 | x86_64-linux-gnu-xargs -0 sed -i \
+	find wing/dae-core -name "*.go" -type f -print0 | xargs -0 sed -i \
 		's/\$$BPF_CLANG/clang/g; \
 		 s/\$$BPF_STRIP_FLAG/-strip/g; \
 		 s/\$$BPF_CFLAGS/-O2 -g -Wall/g; \
