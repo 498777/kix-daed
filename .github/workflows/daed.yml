@@ -73,7 +73,7 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libelf-dev libcap-dev build-essential git
+          sudo apt-get install -y clang llvm libelf-dev libcap-dev build-essential git pkg-config
 
       - name: Setup Toolchains
         uses: actions/setup-go@v5
@@ -94,7 +94,7 @@ jobs:
       - name: Configure Registry & Patch
         run: |
           echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
-          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmr
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
           find . -name "tsdown.config.ts" -exec sed -i "s/target: '.*',/& inlineOnly: false,/g" {} +
 
       - name: Build with Makefile
