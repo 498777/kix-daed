@@ -73,7 +73,7 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libelf-dev libcap-dev build-essential git pkg-config
+          sudo apt-get install -y clang llvm libelf-dev libcap-dev build-essential git pkg-config linux-headers-generic
 
       - name: Setup Toolchains
         uses: actions/setup-go@v5
@@ -89,7 +89,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.24.0 # 严格匹配 package.json 要求
+          version: 10.24.0
 
       - name: Configure Registry & Patch
         run: |
