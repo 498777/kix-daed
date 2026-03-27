@@ -38,13 +38,15 @@ build-backend:
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	cd wing && CGO_ENABLED=0 go mod tidy
 	
-	@echo "==> 强力生成 eBPF 绑定 (精准匹配源码变量)..."
+	@echo "==> 强力生成 eBPF 绑定 (修复参数解析)..."
 	cd wing/dae-core && \
 		GOOS= GOARCH= \
 		BPF_CLANG=clang \
+		BPF2GO_CC=clang \
 		BPF_STRIP_FLAG="-strip" \
-		BPF_CFLAGS="-O2 -g -Wall" \
 		BPF_TARGET="bpf" \
+		BPF_CFLAGS='"-O2 -g -Wall"' \
+		BPF2GO_CFLAGS='"-O2 -g -Wall"' \
 		go generate -v ./...
 
 	@echo "==> 生成 wing 辅助代码..."
