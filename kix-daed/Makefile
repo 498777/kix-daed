@@ -38,11 +38,16 @@ build-backend:
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	
 	@echo "==> 整理依赖..."
-	cd wing && go mod tidy
+	cd wing && CGO_ENABLED=0 go mod tidy
 	
-	@echo "==> 生成 eBPF 绑定 (显式指定 Clang 编译器)..."
-	cd wing/dae-core && CC=clang GOOS= GOARCH= go generate ./...
-	mkdir -p $(BIN_DIR)
+	@echo "==> 强力生成 eBPF 绑定..."
+	cd wing && \
+		BPF2GO_CC=clang \
+		BPF_CLANG=clang \
+		CLANG=clang \
+		GOOS= GOARCH= \
+		go generate -v ./...
 
 	@echo "==> 开始最终交叉编译 (GOARCH=$(GOARCH))..."
-	cd wing && GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -o ../$(BIN_DIR)/$(NAME)-$(GOOS)-$(GOARCH) .
+	mkdir -p $(BIN_DIR)
+	cd wing && GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -tags kernelext -o ../$(BIN_DIR)/$(NAME)-$(GOOS)-$(GOARCH) .
