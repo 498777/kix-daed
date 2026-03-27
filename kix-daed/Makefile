@@ -37,10 +37,11 @@ build-backend:
 	@echo "==> 注入本地替换规则 (Replace)..."
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	
-	@echo "==> 整理依赖并执行编译..."
+	@echo "==> 整理依赖并生成 eBPF 绑定..."
 	cd wing && go mod download
 	cd wing && go mod tidy
-	
+	cd wing && go generate ./...
 	mkdir -p $(BIN_DIR)
+
 	@echo "==> 编译后端二进制 (GOARCH=$(GOARCH))..."
 	cd wing && GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -o ../$(BIN_DIR)/$(NAME)-$(GOOS)-$(GOARCH) .
