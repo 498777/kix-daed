@@ -97,10 +97,28 @@ jobs:
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
 
       - name: Patch tsdown Config
-        # 递归修复所有子包中的 tsdown 严格模式错误
+        # 优化补丁：无论 target 是 node18 还是 es2022，只要有 target 这一行，就在后面注入 inlineOnly: false
         run: |
-          find . -name "tsdown.config.ts" -exec sed -i "s/target: 'node18',/target: 'node18', inlineOnly: false,/g" {} +
+          find . -name "tsdown.config.ts" -exec sed -i "s/target: '.*',/& inlineOnly: false,/g" {} +
+          echo "✔ 补丁注入尝试完成"
 
+      - name: Verify Patch (Debug)
+        # 这一步就是 cat 检查，它会在 Action 日志里打印出文件内容
+        run: |
+          echo "--- dae-lsp 补丁状态检查 ---"
+          cat packages/dae-lsp/tsdown.config.ts || echo "文件不存在"
+          echo "--- dae-vscode 补丁状态检查 ---"
+          cat packages/dae-vscode/tsdown.config.ts || echo "文件不存在"
+
+      - name: Build with Makefile
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          D_SHA: ${{ needs.check-versions.outputs.daed_sha }}
+          W_SHA: ${{ needs.check-versions.outputs.wing_sha }}
+          C_SHA: ${{ needs.check-versions.outputs.core_sha }}
+          TURBO_TELEMETRY_DISABLED: 1
+        run: make all
       - name: Build with Makefile
         env:
           GOOS: linux
