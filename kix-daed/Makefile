@@ -30,8 +30,14 @@ build-web:
 	pnpm build
 
 build-backend:
-	@echo "==> 整理后端依赖 (Tidy)..."
+	@echo "==> 准备自定义优化依赖 (olicesx/outbound)..."
+	rm -rf outbound && \
+	git clone --depth=1 -b perf/complete-optimizations https://github.com/olicesx/outbound.git outbound
+	
+	@echo "==> 注入本地替换规则 (Replace)..."
+	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
+	
+	@echo "==> 整理依赖并执行编译..."
 	cd wing && go mod tidy
-	@echo "==> 编译后端二进制 ($(GOOS)-$(GOARCH))..."
 	mkdir -p $(BIN_DIR)
 	cd wing && GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -o ../$(BIN_DIR)/$(NAME)-$(GOOS)-$(GOARCH) .
