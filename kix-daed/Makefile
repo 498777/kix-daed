@@ -30,7 +30,8 @@ build-web:
 	pnpm build
 
 build-backend:
-	@echo "==> 编译后端二进制..."
+	@echo "==> 整理后端依赖 (Tidy)..."
+	cd wing && go mod tidy
+	@echo "==> 编译后端二进制 ($(GOOS)-$(GOARCH))..."
 	mkdir -p $(BIN_DIR)
-	# 核心修复：进入 wing 目录编译，输出到根目录 bin
 	cd wing && GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -o ../$(BIN_DIR)/$(NAME)-$(GOOS)-$(GOARCH) .
