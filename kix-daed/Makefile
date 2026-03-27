@@ -31,13 +31,17 @@ build-web:
 
 build-backend:
 	@echo "==> 准备自定义优化依赖 (olicesx/outbound)..."
-	rm -rf outbound && \
-	git clone --depth=1 -b perf/complete-optimizations https://github.com/olicesx/outbound.git outbound
+	rm -rf ./outbound
+	git clone --depth=1 -b perf/complete-optimizations https://github.com/olicesx/outbound.git ./outbound
 	
 	@echo "==> 注入本地替换规则 (Replace)..."
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	
 	@echo "==> 整理依赖并执行编译..."
+	cd wing && go mod download
 	cd wing && go mod tidy
+	
 	mkdir -p $(BIN_DIR)
+	@echo "==> 编译后端二进制 (GOARCH=$(GOARCH))..."
+	# 确保使用外部传入的 GOOS/GOARCH
 	cd wing && GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -o ../$(BIN_DIR)/$(NAME)-$(GOOS)-$(GOARCH) .
