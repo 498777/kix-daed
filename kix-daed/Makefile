@@ -43,5 +43,4 @@ build-backend:
 	
 	mkdir -p $(BIN_DIR)
 	@echo "==> 编译后端二进制 (GOARCH=$(GOARCH))..."
-	# 确保使用外部传入的 GOOS/GOARCH
 	cd wing && GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -o ../$(BIN_DIR)/$(NAME)-$(GOOS)-$(GOARCH) .
