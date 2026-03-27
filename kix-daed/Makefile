@@ -40,9 +40,9 @@ build-backend:
 	@echo "==> 整理依赖..."
 	cd wing && go mod tidy
 	
-	@echo "==> 生成 eBPF 绑定 (强制使用宿主机架构避免 exec 错误)..."
-	cd wing/dae-core && GOOS= GOARCH= go generate ./...
-	
+	@echo "==> 生成 eBPF 绑定 (显式指定 Clang 编译器)..."
+	cd wing/dae-core && CC=clang GOOS= GOARCH= go generate ./...
 	mkdir -p $(BIN_DIR)
-	@echo "==> 开始交叉编译 (GOARCH=$(GOARCH))..."
+
+	@echo "==> 开始最终交叉编译 (GOARCH=$(GOARCH))..."
 	cd wing && GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -o ../$(BIN_DIR)/$(NAME)-$(GOOS)-$(GOARCH) .
