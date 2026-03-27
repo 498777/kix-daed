@@ -39,7 +39,7 @@ build-backend:
 	cd wing && CGO_ENABLED=0 go mod tidy
 	
 	@echo "==> 暴力修复 dae-core 源码中的 go:generate (外部路径脚本版)..."
-	GOOS= GOARCH= go run kix-daed/patch/patch_ebpf.go
+	GOOS= GOARCH= go run patch/patch_ebpf.go
 
 	@echo "==> 验证修改结果..."
 	@grep "go:generate" wing/dae-core/control/control.go || true
