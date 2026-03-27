@@ -75,11 +75,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang llvm libelf-dev libcap-dev build-essential git
 
-      - name: Setup Toolchains
+      - name: Setup Go (The Future Version)
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
-          cache: true
+          go-version: 'tip'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -94,8 +93,7 @@ jobs:
       - name: Configure Registry & Patch
         run: |
           echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
-          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
-          # 这一行补丁非常关键，保留它
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmr
           find . -name "tsdown.config.ts" -exec sed -i "s/target: '.*',/& inlineOnly: false,/g" {} +
 
       - name: Build with Makefile
