@@ -67,8 +67,10 @@ jobs:
         with:
           path: my-config
 
-      - name: Inject Custom Makefile
-        run: cp my-config/kix-daed/Makefile ./Makefile
+      - name: Inject Custom Makefile & Patches
+        run: |
+          cp my-config/kix-daed/Makefile ./Makefile
+          cp -r my-config/kix-daed/patch ./patch
 
       - name: Install Build Dependencies
         run: |
