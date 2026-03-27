@@ -38,21 +38,20 @@ build-backend:
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	cd wing && CGO_ENABLED=0 go mod tidy
 	
-	@echo "==> 强力生成 eBPF 绑定 (修复参数解析)..."
-	cd wing/dae-core && \
-		GOOS= GOARCH= \
-		BPF_CLANG=clang \
-		BPF2GO_CC=clang \
-		BPF_STRIP_FLAG="-strip" \
-		BPF_TARGET="bpf" \
-		BPF_CFLAGS='"-O2 -g -Wall"' \
-		BPF2GO_CFLAGS='"-O2 -g -Wall"' \
-		go generate -v ./...
+	@echo "==> 暴力修复 dae-core 源码中的 go:generate 变量..."
+	find wing/dae-core -name "*.go" -type f -exec sed -i \
+		's/$$BPF_CLANG/clang/g; \
+		 s/$$BPF_STRIP_FLAG/-no-strip/g; \
+		 s/$$BPF_CFLAGS/-O2 -g -Wall/g; \
+		 s/$$BPF_TARGET/bpf/g' {} +
+
+	@echo "==> 强制生成 eBPF 绑定..."
+	cd wing/dae-core && GOOS= GOARCH= go generate -v ./...
 
 	@echo "==> 生成 wing 辅助代码..."
 	cd wing && GOOS= GOARCH= go generate -v ./...
 
-	@echo "==> 执行最终交叉编译 (GOARCH=$(GOARCH))..."
+	@echo "==> 最终编译 (GOARCH=$(GOARCH))..."
 	mkdir -p $(BIN_DIR)
 	cd wing && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) \
 		-tags kernelext \
