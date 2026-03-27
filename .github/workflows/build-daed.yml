@@ -69,7 +69,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          find bin/ -type f -name "daed" -exec cp {} dist/daed-${{ matrix.arch }} \;
+          APK_FILE=$(find bin/ -type f -name "daed_*.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            echo "Error: daed apk not found."
+            exit 1
+          fi
+          tar -xvzf "$APK_FILE" usr/bin/daed
+          cp usr/bin/daed dist/daed-${{ matrix.arch }}
           if [ ! -f dist/daed-${{ matrix.arch }} ]; then exit 1; fi
           chmod +x dist/daed-${{ matrix.arch }}
 
