@@ -117,15 +117,6 @@ jobs:
           D_SHA: ${{ needs.check-versions.outputs.daed_sha }}
           W_SHA: ${{ needs.check-versions.outputs.wing_sha }}
           C_SHA: ${{ needs.check-versions.outputs.core_sha }}
-          TURBO_TELEMETRY_DISABLED: 1
-        run: make all
-      - name: Build with Makefile
-        env:
-          GOOS: linux
-          GOARCH: ${{ matrix.goarch }}
-          D_SHA: ${{ needs.check-versions.outputs.daed_sha }}
-          W_SHA: ${{ needs.check-versions.outputs.wing_sha }}
-          C_SHA: ${{ needs.check-versions.outputs.core_sha }}
           # 禁用 Turbo 的遥测和某些严格检查
           TURBO_TELEMETRY_DISABLED: 1
         run: make all
