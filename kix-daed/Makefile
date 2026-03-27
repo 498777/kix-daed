@@ -40,13 +40,14 @@ build-backend:
 	@echo "==> 整理依赖..."
 	cd wing && CGO_ENABLED=0 go mod tidy
 	
-	@echo "==> 强力生成 eBPF 绑定..."
-	cd wing && \
-		BPF2GO_CC=clang \
-		BPF_CLANG=clang \
-		CLANG=clang \
+	@echo "==> 生成 dae-core 的 eBPF 绑定..."
+	cd wing/dae-core && \
+		BPF2GO_CC=clang BPF_CLANG=clang CLANG=clang \
 		GOOS= GOARCH= \
 		go generate -v ./...
+
+	@echo "==> 生成 wing 的辅助代码..."
+	cd wing && GOOS= GOARCH= go generate -v ./...
 
 	@echo "==> 开始最终交叉编译 (GOARCH=$(GOARCH))..."
 	mkdir -p $(BIN_DIR)
