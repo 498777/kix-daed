@@ -1,4 +1,4 @@
-name: Build packages daed
+name: Build package daed
 
 on:
   workflow_dispatch:
@@ -27,14 +27,15 @@ jobs:
         id: meta
         shell: bash
         run: |
-          pkg_version=$(grep '^PKG_VERSION:=' daed/Makefile | head -n 1 | cut -d= -f2)
-          pkg_release=$(grep '^PKG_RELEASE:=' daed/Makefile | head -n 1 | cut -d= -f2)
-          version="${pkg_version}-r${pkg_release}"
-          release_tag="daed_${version}"
-          release_name="daed_${version}"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
-          echo "release_name=${release_name}" >> "$GITHUB_OUTPUT"
+          daed_h=$(grep '^DAED_VERSION:=' daed/Makefile | cut -d- -f2)
+          wing_h=$(grep '^WING_VERSION:=' daed/Makefile | cut -d- -f2)
+          core_h=$(grep '^CORE_VERSION:=' daed/Makefile | cut -d- -f2)
+          
+          tag="daed_${daed_h}-wing_${wing_h}-core_${core_h}"
+          
+          echo "version=${tag}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "release_name=${tag}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
