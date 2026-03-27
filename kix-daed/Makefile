@@ -1,5 +1,3 @@
-# 路径：kix-daed/Makefile
-
 NAME := daed
 BIN_DIR := bin
 
@@ -24,21 +22,22 @@ prepare:
 
 patch:
 	@echo "==> 替换并追踪自定义内核..."
+	# 使用 cd 确保在子模块路径内操作
 	cd wing && \
 	git submodule set-url dae-core https://github.com/olicesx/dae.git && \
-	git submodule update --init --remote dae-core && \
-	cd dae-core && \
+	git submodule update --init --remote dae-core
+	cd wing/dae-core && \
 	git fetch origin optimize/code-quality-fixes && \
 	git checkout optimize/code-quality-fixes
 
 build-web:
 	@echo "==> 正在安装依赖并配置环境..."
-	# 确保在安装前已经有了 Actions 生成的 .npmrc
-    pnpm install --no-frozen-lockfile
+	pnpm install --no-frozen-lockfile
 	@echo "==> 正在按照依赖链编译所有前端包..."
-	pnpm build 
+	pnpm build
 
 build-backend:
 	@echo "==> 编译后端二进制 ($(GOOS)-$(GOARCH))..."
 	mkdir -p $(BIN_DIR)
-	$(GOBUILD) -o $(BIN_DIR)/$(NAME)-$(GOOS)-$(GOARCH)
+	# 使用 env 确保 Go 编译器能拿到 Action 传进来的变量
+	GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -o $(BIN_DIR)/$(NAME)-$(GOOS)-$(GOARCH)
