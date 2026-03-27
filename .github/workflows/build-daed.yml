@@ -123,6 +123,6 @@ jobs:
           allowUpdates: true
           replacesArtifacts: true
           generateReleaseNotes: true
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           commit: ${{ github.sha }}
           artifacts: "release-assets/daed-*"
