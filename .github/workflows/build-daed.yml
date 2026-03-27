@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - main
-      
+
 permissions:
   contents: write
 
@@ -14,7 +14,6 @@ jobs:
     name: Prepare version
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.meta.outputs.version }}
       release_tag: ${{ steps.meta.outputs.release_tag }}
       release_name: ${{ steps.meta.outputs.release_name }}
     steps:
@@ -25,12 +24,12 @@ jobs:
         id: meta
         shell: bash
         run: |
-          pkg_version=$(grep '^PKG_VERSION:=' daed/Makefile | head -n 1 | cut -d= -f2)
-          pkg_release=$(grep '^PKG_RELEASE:=' daed/Makefile | head -n 1 | cut -d= -f2)
-          version="${pkg_version}-r${pkg_release}"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "release_tag=daed_${version}" >> "$GITHUB_OUTPUT"
-          echo "release_name=daed_${version}" >> "$GITHUB_OUTPUT"
+          daed_h=$(grep '^DAED_VERSION:=' daed/Makefile | cut -d- -f2)
+          wing_h=$(grep '^WING_VERSION:=' daed/Makefile | cut -d- -f2)
+          core_h=$(grep '^CORE_VERSION:=' daed/Makefile | cut -d- -f2)
+          tag_name="daed_${daed_h}-wing_${wing_h}-core_${core_h}"
+          echo "release_tag=${tag_name}" >> "$GITHUB_OUTPUT"
+          echo "release_name=${tag_name}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.arch }}
@@ -62,7 +61,7 @@ jobs:
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
           FEEDNAME: packages_ci
-          PACKAGES: daed
+          PACKAGES: luci-app-daed
           NO_REFRESH_CHECK: true
           V: s
 
@@ -70,7 +69,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          find bin/targets -type f -name "daed" -exec cp {} dist/daed-${{ matrix.arch }} \;
+          find bin/ -type f -name "daed" -exec cp {} dist/daed-${{ matrix.arch }} \;
           if [ ! -f dist/daed-${{ matrix.arch }} ]; then exit 1; fi
           chmod +x dist/daed-${{ matrix.arch }}
 
@@ -98,5 +97,6 @@ jobs:
           tag: ${{ needs.prepare.outputs.release_tag }}
           name: ${{ needs.prepare.outputs.release_name }}
           allowUpdates: true
+          replacesArtifacts: true
           token: ${{ secrets.GITHUB_TOKEN }}
           artifacts: "release-assets/daed-*"
