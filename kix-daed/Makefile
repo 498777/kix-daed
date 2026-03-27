@@ -38,10 +38,10 @@ build-backend:
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	cd wing && CGO_ENABLED=0 go mod tidy
 	
-	@echo "==> 暴力修复 dae-core 源码中的 go:generate 变量..."
+	@echo "==> 暴力修复 dae-core 源码中的 go:generate 变量 (彻底终结参数漂移)..."
 	find wing/dae-core -name "*.go" -type f -exec sed -i \
 		's/$$BPF_CLANG/clang/g; \
-		 s/$$BPF_STRIP_FLAG/-no-strip/g; \
+		 s/$$BPF_STRIP_FLAG/-strip/g; \
 		 s/$$BPF_CFLAGS/-O2 -g -Wall/g; \
 		 s/$$BPF_TARGET/bpf/g' {} +
 
@@ -51,7 +51,7 @@ build-backend:
 	@echo "==> 生成 wing 辅助代码..."
 	cd wing && GOOS= GOARCH= go generate -v ./...
 
-	@echo "==> 最终编译 (GOARCH=$(GOARCH))..."
+	@echo "==> 最终交叉编译 (GOARCH=$(GOARCH))..."
 	mkdir -p $(BIN_DIR)
 	cd wing && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) \
 		-tags kernelext \
