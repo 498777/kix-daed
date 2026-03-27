@@ -57,7 +57,7 @@ build-backend:
 	@echo '        return nil' >> patch_ebpf.go
 	@echo '    })' >> patch_ebpf.go
 	@echo '}' >> patch_ebpf.go
-	go run patch_ebpf.go
+	GOOS= GOARCH= go run patch_ebpf.go
 	rm patch_ebpf.go
 
 	@echo "==> 验证修改结果..."
