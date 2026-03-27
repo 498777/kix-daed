@@ -47,7 +47,7 @@ build-backend:
 			s = strings.ReplaceAll(s, "$$BPF_STRIP_FLAG", "-strip"); \
 			s = strings.ReplaceAll(s, "$$BPF_CFLAGS", "-O2 -g -Wall"); \
 			s = strings.ReplaceAll(s, "$$BPF_TARGET", "bpf"); \
-			os.WriteFile("{}", []byte(s), 0644); \
+			_ = os.WriteFile("{}", []byte(s), 0644); \
 		}'
 
 	@echo "==> 验证修改结果..."
