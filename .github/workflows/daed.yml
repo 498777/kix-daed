@@ -1,0 +1,142 @@
+name: Auto Build daed & Deep Cleanup
+
+on:
+  schedule:
+    - cron: '0 * * * *' # 每小时运行一次
+  workflow_dispatch:      # 支持手动触发
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  check-versions:
+    runs-on: ubuntu-latest
+    outputs:
+      has_updates: ${{ steps.compare.outputs.has_updates }}
+      tag_name: ${{ steps.compare.outputs.tag_name }}
+      daed_sha: ${{ steps.shas.outputs.daed }}
+      wing_sha: ${{ steps.shas.outputs.wing }}
+      core_sha: ${{ steps.shas.outputs.core }}
+    steps:
+      - name: Fetch Latest SHAs
+        id: shas
+        run: |
+          # 获取三个仓库的最新 Commit SHA
+          DAED=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r .sha)
+          WING=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r .sha)
+          CORE=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r .sha)
+          
+          D_SHORT=${DAED:0:7}
+          W_SHORT=${WING:0:7}
+          C_SHORT=${CORE:0:7}
+          
+          echo "daed=$D_SHORT" >> $GITHUB_OUTPUT
+          echo "wing=$W_SHORT" >> $GITHUB_OUTPUT
+          echo "core=$C_SHORT" >> $GITHUB_OUTPUT
+          echo "full_tag=daed_${D_SHORT}-wing_${W_SHORT}-core_${C_SHORT}" >> $GITHUB_OUTPUT
+
+      - name: Compare with Existing Tags
+        id: compare
+        run: |
+          TAG=${{ steps.shas.outputs.full_tag }}
+          # 检查你的仓库中是否已存在该组合的 Tag
+          if git ls-remote --tags origin | grep -q "$TAG"; then
+            echo "has_updates=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_updates=true" >> $GITHUB_OUTPUT
+            echo "tag_name=$TAG" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    needs: check-versions
+    if: needs.check-versions.outputs.has_updates == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goarch: amd64
+          - goarch: arm64
+    steps:
+      - name: Checkout Official daed
+        uses: actions/checkout@v4
+        with:
+          repository: daeuniverse/daed
+          fetch-depth: 0
+
+      - name: Checkout Your Custom Config
+        uses: actions/checkout@v4
+        with:
+          path: my-config
+
+      - name: Inject Custom Makefile
+        run: cp my-config/kix-daed/Makefile ./Makefile
+
+      - name: Install Build Dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libelf-dev libcap-dev build-essential git
+
+      - name: Setup Toolchains
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: latest
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Build with Makefile
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          D_SHA: ${{ needs.check-versions.outputs.daed_sha }}
+          W_SHA: ${{ needs.check-versions.outputs.wing_sha }}
+          C_SHA: ${{ needs.check-versions.outputs.core_sha }}
+        run: make all
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-versions.outputs.tag_name }}
+          files: bin/daed-*
+          body: |
+            ## 自动同步编译报告
+            上游组件发生更新，已自动触发重新编译。
+            
+            ### 版本快照 (SHAs):
+            - **daed**: `${{ needs.check-versions.outputs.daed_sha }}`
+            - **wing**: `${{ needs.check-versions.outputs.wing_sha }}`
+            - **core**: `olicesx/dae` @ `${{ needs.check-versions.outputs.core_sha }}`
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  cleanup:
+    needs: [check-versions, build]
+    if: always() 
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete Older Releases
+        uses: dev-drprasad/delete-older-releases@master
+        with:
+          keep_latest: 3
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+        continue-on-error: true
+
+      - name: Cleanup Old Action Artifacts
+        uses: c-hive/gha-remove-artifacts@master
+        with:
+          age: '1 days'
+          skip-recent: 3
+        continue-on-error: true
+
+      - name: Cleanup Workflow Logs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          repository: ${{ github.repository }}
+          retain_days: 1
+        continue-on-error: true
