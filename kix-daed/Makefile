@@ -40,7 +40,7 @@ build-backend:
 	@echo "==> 整理依赖并生成 eBPF 绑定..."
 	cd wing && go mod download
 	cd wing && go mod tidy
-	cd wing && go generate ./...
+	cd wing && GOOS= GOARCH= go generate ./...
 	mkdir -p $(BIN_DIR)
 
 	@echo "==> 编译后端二进制 (GOARCH=$(GOARCH))..."
