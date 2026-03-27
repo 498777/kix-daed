@@ -5,4 +5,4 @@
 
 package control
 
-//go:generate go run -mod=mod github.com/cilium/ebpf/cmd/bpf2go -cc clang -strip strip -target bpf -type port_range -type tuples_key bpf kern/tproxy.c -- -I./headers -O2 -g -Wall
+//go:generate go run -mod=mod github.com/cilium/ebpf/cmd/bpf2go -cc clang -strip llvm-strip -target bpf -type port_range -type tuples_key bpf kern/tproxy.c -- -I./headers -O2 -g -Wall
