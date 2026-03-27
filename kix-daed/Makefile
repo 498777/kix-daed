@@ -38,32 +38,10 @@ build-backend:
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	cd wing && CGO_ENABLED=0 go mod tidy
 	
-	@echo "==> 暴力修复 dae-core 源码中的 go:generate (Heredoc 稳定版)..."
-	@cat << 'EOF' > patch_ebpf.go
-package main
-import ("os"; "strings"; "path/filepath")
-func main() {
-	err := filepath.Walk("wing/dae-core", func(path string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() && strings.HasSuffix(path, ".go") {
-			b, _ := os.ReadFile(path)
-			s := string(b)
-			if strings.Contains(s, "bpf2go") {
-				s = strings.ReplaceAll(s, "$$BPF_CLANG", "clang")
-				s = strings.ReplaceAll(s, "$$BPF_STRIP_FLAG", "strip")
-				s = strings.ReplaceAll(s, "$$BPF_CFLAGS", "-O2 -g -Wall")
-				s = strings.ReplaceAll(s, "$$BPF_TARGET", "bpf")
-				os.WriteFile(path, []byte(s), 0644)
-			}
-		}
-		return nil
-	})
-	if err != nil { os.Exit(1) }
-}
-EOF
-	@GOOS= GOARCH= go run patch_ebpf.go
-	@rm patch_ebpf.go
+	@echo "==> 暴力修复 dae-core 源码中的 go:generate (外部路径脚本版)..."
+	GOOS= GOARCH= go run kix-daed/patch/patch_ebpf.go
 
-	@echo "==> 验证修改结果 (Debug)..."
+	@echo "==> 验证修改结果..."
 	@grep "go:generate" wing/dae-core/control/control.go || true
 
 	@echo "==> 强制生成 eBPF 绑定..."
