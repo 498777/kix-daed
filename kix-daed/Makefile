@@ -38,10 +38,14 @@ build-backend:
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	cd wing && CGO_ENABLED=0 go mod tidy
 	
-	@echo "==> 强制生成 eBPF 绑定..."
+	@echo "==> 强力生成 eBPF 绑定 (精准匹配源码变量)..."
 	cd wing/dae-core && \
-		GOOS= GOARCH= BPF2GO_CC=clang BPF_CLANG=clang CLANG=clang \
-		go generate -v -run "bpf2go" ./... -- -cflags "-O2 -g -Wall"
+		GOOS= GOARCH= \
+		BPF_CLANG=clang \
+		BPF_STRIP_FLAG="-strip" \
+		BPF_CFLAGS="-O2 -g -Wall" \
+		BPF_TARGET="bpf" \
+		go generate -v ./...
 
 	@echo "==> 生成 wing 辅助代码..."
 	cd wing && GOOS= GOARCH= go generate -v ./...
@@ -51,6 +55,4 @@ build-backend:
 	cd wing && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) \
 		-tags kernelext \
 		-o ../$(BIN_DIR)/$(NAME)-$(GOARCH) .
-	
-	@echo "==> 赋予执行权限..."
 	chmod +x $(BIN_DIR)/$(NAME)-$(GOARCH)
