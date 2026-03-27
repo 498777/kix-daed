@@ -36,8 +36,7 @@ build-web:
 	# 确保在安装前已经有了 Actions 生成的 .npmrc
     pnpm install --no-frozen-lockfile
 	@echo "==> 正在按照依赖链编译所有前端包..."
-	# 使用 daed... 确保按照资料要求的顺序编译 dae-lsp, dae-editor 等
-	pnpm build --filter daed...
+	pnpm build 
 
 build-backend:
 	@echo "==> 编译后端二进制 ($(GOOS)-$(GOARCH))..."
