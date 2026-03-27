@@ -1,4 +1,4 @@
-name: Build packages
+name: Build packages daed
 
 on:
   workflow_dispatch:
@@ -66,9 +66,12 @@ jobs:
           sudo swapoff -a || true
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo -E apt-get update
-          sudo -E apt-get install -y clang llvm npm curl jq apk-tools
+          sudo -E apt-get install -y clang llvm npm curl jq
           sudo npm install -g pnpm n taze
           sudo n stable
+          curl -L https://gitlab.alpinelinux.org/api/v4/projects/5/packages/generic/apk-tools/2.14.0/apk.static.x86_64 -o apk
+          chmod +x apk
+          sudo mv apk /usr/local/bin/apk
 
       - name: Build packages
         uses: sbwml/openwrt-gh-action-sdk@go1.26
