@@ -38,15 +38,19 @@ build-backend:
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	cd wing && CGO_ENABLED=0 go mod tidy
 	
-	@echo "==> 彻底重写 dae-core 中的 go:generate 命令 (不带变量)...
-	find wing/dae-core -name "*.go" -type f -print0 | xargs -0 sed -i \
-		's/BPF_CLANG/clang/g; \
-		 s/BPF_STRIP_FLAG/-strip/g; \
-		 s/BPF_CFLAGS/-O2 -g -Wall/g; \
-		 s/BPF_TARGET/bpf/g; \
-		 s/\$$//g'
+	@echo "==> 暴力修复 dae-core 源码中的 go:generate (Go原生替换版)..."
+	find wing/dae-core -name "*.go" -type f -print0 | xargs -0 -I {} go run -e ' \
+		b, _ := os.ReadFile("{}"); \
+		s := string(b); \
+		if strings.Contains(s, "bpf2go") { \
+			s = strings.ReplaceAll(s, "$$BPF_CLANG", "clang"); \
+			s = strings.ReplaceAll(s, "$$BPF_STRIP_FLAG", "-strip"); \
+			s = strings.ReplaceAll(s, "$$BPF_CFLAGS", "-O2 -g -Wall"); \
+			s = strings.ReplaceAll(s, "$$BPF_TARGET", "bpf"); \
+			os.WriteFile("{}", []byte(s), 0644); \
+		}'
 
-	@echo "==> 验证源码修改结果 (Debug)..."
+	@echo "==> 验证修改结果..."
 	grep "go:generate" wing/dae-core/control/control.go || true
 
 	@echo "==> 强制生成 eBPF 绑定..."
