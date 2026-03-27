@@ -39,5 +39,7 @@ build-web:
 build-backend:
 	@echo "==> 编译后端二进制 ($(GOOS)-$(GOARCH))..."
 	mkdir -p $(BIN_DIR)
-	# 使用 env 确保 Go 编译器能拿到 Action 传进来的变量
-	GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -o $(BIN_DIR)/$(NAME)-$(GOOS)-$(GOARCH)
+	# 关键修复：进入 wing 目录后再执行 go build
+	# 因为 main 模块（go.mod）在 wing 文件夹里
+	cd wing && \
+	GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -o ../$(BIN_DIR)/$(NAME)-$(GOOS)-$(GOARCH) .
