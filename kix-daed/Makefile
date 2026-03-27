@@ -38,12 +38,16 @@ build-backend:
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	cd wing && CGO_ENABLED=0 go mod tidy
 	
-	@echo "==> 暴力修复 dae-core 源码中的 go:generate 变量..."
+	@echo "==> 彻底重写 dae-core 中的 go:generate 命令 (不带变量)...
 	find wing/dae-core -name "*.go" -type f -print0 | xargs -0 sed -i \
-		's/\$$BPF_CLANG/clang/g; \
-		 s/\$$BPF_STRIP_FLAG/-strip/g; \
-		 s/\$$BPF_CFLAGS/-O2 -g -Wall/g; \
-		 s/\$$BPF_TARGET/bpf/g'
+		's/BPF_CLANG/clang/g; \
+		 s/BPF_STRIP_FLAG/-strip/g; \
+		 s/BPF_CFLAGS/-O2 -g -Wall/g; \
+		 s/BPF_TARGET/bpf/g; \
+		 s/\$$//g'
+
+	@echo "==> 验证源码修改结果 (Debug)..."
+	grep "go:generate" wing/dae-core/control/control.go || true
 
 	@echo "==> 强制生成 eBPF 绑定..."
 	cd wing/dae-core && GOOS= GOARCH= go generate -v ./...
@@ -51,7 +55,7 @@ build-backend:
 	@echo "==> 生成 wing 辅助代码..."
 	cd wing && GOOS= GOARCH= go generate -v ./...
 
-	@echo "==> 执行最终交叉编译 (GOARCH=$(GOARCH))..."
+	@echo "==> 最终编译 (GOARCH=$(GOARCH))..."
 	mkdir -p $(BIN_DIR)
 	cd wing && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) \
 		-tags kernelext \
