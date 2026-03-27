@@ -75,10 +75,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang llvm libelf-dev libcap-dev build-essential git
 
-      - name: Setup Go (The Future Version)
-        uses: actions/setup-go@v5
-        with:
-          go-version: 'tip'
+      - name: Manual Install Go Tip (Future 1.26)
+        run: |
+          sudo apt-get update && sudo apt-get install -y golang-go
+          git clone --depth=1 https://go.googlesource.com/go $HOME/gotip
+          cd $HOME/gotip/src
+          ./make.bash
+          echo "$HOME/gotip/bin" >> $GITHUB_PATH
+          echo "GOROOT=$HOME/gotip" >> $GITHUB_ENV
+          
+      - name: Verify Go Version
+        run: go version
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
