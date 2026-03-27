@@ -46,7 +46,11 @@ build-backend:
 	@echo "==> 生成 wing 辅助代码..."
 	cd wing && GOOS= GOARCH= go generate -v ./...
 
-	@echo "==> 执行最终编译 (GOARCH=$(GOARCH))..."
+	@echo "==> 执行最终交叉编译 (GOARCH=$(GOARCH))..."
 	mkdir -p $(BIN_DIR)
-	cd wing && $(GOBUILD) -tags kernelext -o ../$(BIN_DIR)/$(NAME)-linux-$(GOARCH) .
-	chmod +x $(BIN_DIR)/$(NAME)-linux-$(GOARCH)
+	cd wing && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) \
+		-tags kernelext \
+		-o ../$(BIN_DIR)/$(NAME)-$(GOARCH) .
+	
+	@echo "==> 赋予执行权限..."
+	chmod +x $(BIN_DIR)/$(NAME)-$(GOARCH)
