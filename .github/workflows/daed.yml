@@ -104,7 +104,6 @@ jobs:
           D_SHA: ${{ needs.check-versions.outputs.daed_sha }}
           W_SHA: ${{ needs.check-versions.outputs.wing_sha }}
           C_SHA: ${{ needs.check-versions.outputs.core_sha }}
-          BPF_CFLAGS: "-O2 -g -Wall"
           TURBO_TELEMETRY_DISABLED: 1
         run: make all
 
