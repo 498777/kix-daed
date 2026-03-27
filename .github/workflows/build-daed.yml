@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm npm curl jq
+          sudo apt-get install -y clang llvm npm curl jq p7zip-full
           sudo npm install -g pnpm n
           sudo n stable
 
@@ -70,13 +70,11 @@ jobs:
         run: |
           mkdir -p dist
           APK_FILE=$(find bin/ -type f -name "daed_*.apk" | head -n 1)
-          if [ -z "$APK_FILE" ]; then
-            echo "Error: daed apk not found."
-            exit 1
-          fi
-          tar -xvzf "$APK_FILE" usr/bin/daed
-          cp usr/bin/daed dist/daed-${{ matrix.arch }}
-          if [ ! -f dist/daed-${{ matrix.arch }} ]; then exit 1; fi
+          if [ -z "$APK_FILE" ]; then exit 1; fi
+          7z x "$APK_FILE" -oout_dir
+          TARGET_BIN=$(find out_dir/ -type f -name "daed" | head -n 1)
+          if [ -z "$TARGET_BIN" ]; then exit 1; fi
+          cp "$TARGET_BIN" dist/daed-${{ matrix.arch }}
           chmod +x dist/daed-${{ matrix.arch }}
 
       - name: Upload Artifact
