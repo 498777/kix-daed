@@ -1,0 +1,8 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-only
+ * Copyright (c) 2022-2025, daeuniverse Organization <dae@v2raya.org>
+ */
+
+package control
+
+//go:generate go run -mod=mod github.com/cilium/ebpf/cmd/bpf2go -cc clang -strip strip -target bpf -type port_range -type tuples_key bpf kern/tproxy.c -- -I./headers -O2 -g -Wall
