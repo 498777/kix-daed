@@ -37,20 +37,17 @@ build-backend:
 	@echo "==> 注入本地替换规则..."
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	cd wing && CGO_ENABLED=0 go mod tidy
-	
-	@echo "==> 暴力修复 dae-core 源码中的 go:generate (外部路径脚本版)..."
-	GOOS= GOARCH= go run patch/patch_ebpf.go
 
-	@echo "==> 验证修改结果..."
-	@grep "go:generate" wing/dae-core/control/control.go || true
+	@echo "==> 正在执行物理替换 (掉包计)..."
+	cp patch/control.go.fixed wing/dae-core/control/control.go
+
+	@echo "==> 验证文件内容 (Debug)..."
+	@cat wing/dae-core/control/control.go
 
 	@echo "==> 强制生成 eBPF 绑定..."
 	cd wing/dae-core && GOOS= GOARCH= go generate -v ./...
 
-	@echo "==> 生成 wing 辅助代码..."
-	cd wing && GOOS= GOARCH= go generate -v ./...
-
-	@echo "==> 最终编译 (GOARCH=$(GOARCH))..."
+	@echo "==> 最终编译..."
 	mkdir -p $(BIN_DIR)
 	cd wing && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) \
 		-tags kernelext \
