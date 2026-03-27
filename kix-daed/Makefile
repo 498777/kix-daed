@@ -38,25 +38,25 @@ build-backend:
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	cd wing && CGO_ENABLED=0 go mod tidy
 	
-	@echo "==> 暴力修复 dae-core 源码中的 go:generate (临时脚本版)..."
+	@echo "==> 暴力修复 dae-core 源码中的 go:generate (针对 bpf2go 调优版)..."
 	@echo 'package main' > patch_ebpf.go
 	@echo 'import ("os"; "strings"; "path/filepath")' >> patch_ebpf.go
 	@echo 'func main() {' >> patch_ebpf.go
 	@echo '    filepath.Walk("wing/dae-core", func(path string, info os.FileInfo, err error) error {' >> patch_ebpf.go
-	@echo '        if err == nil && !info.IsDir() && strings.HasSuffix(path, ".go") {' >> patch_ebpf.go
-	@echo '            b, _ := os.ReadFile(path)' >> patch_ebpf.go
-	@echo '            s := string(b)' >> patch_ebpf.go
-	@echo '            if strings.Contains(s, "bpf2go") {' >> patch_ebpf.go
-	@echo '                s = strings.ReplaceAll(s, "$$BPF_CLANG", "clang")' >> patch_ebpf.go
-	@echo '                s = strings.ReplaceAll(s, "$$BPF_STRIP_FLAG", "-strip")' >> patch_ebpf.go
-	@echo '                s = strings.ReplaceAll(s, "$$BPF_CFLAGS", "-O2 -g -Wall")' >> patch_ebpf.go
-	@echo '                s = strings.ReplaceAll(s, "$$BPF_TARGET", "bpf")' >> patch_ebpf.go
-	@echo '                os.WriteFile(path, []byte(s), 0644)' >> patch_ebpf.go
-	@echo '            }' >> patch_ebpf.go
-	@echo '        }' >> patch_ebpf.go
-	@echo '        return nil' >> patch_ebpf.go
-	@echo '    })' >> patch_ebpf.go
-	@echo '}' >> patch_ebpf.go
+	@echo '        if err == nil && !info.IsDir() && strings.HasSuffix(path, ".go") {' >> path_ebpf.go
+	@echo '            b, _ := os.ReadFile(path)' >> path_ebpf.go
+	@echo '            s := string(b)' >> path_ebpf.go
+	@echo '            if strings.Contains(s, "bpf2go") {' >> path_ebpf.go
+	@echo '                s = strings.ReplaceAll(s, "$$BPF_CLANG", "clang")' >> path_ebpf.go
+	@echo '                s = strings.ReplaceAll(s, "$$BPF_STRIP_FLAG", "strip")' >> path_ebpf.go # 这里去掉了多余的横杠
+	@echo '                s = strings.ReplaceAll(s, "$$BPF_CFLAGS", "-O2 -g -Wall")' >> path_ebpf.go
+	@echo '                s = strings.ReplaceAll(s, "$$BPF_TARGET", "bpf")' >> path_ebpf.go
+	@echo '                os.WriteFile(path, []byte(s), 0644)' >> path_ebpf.go
+	@echo '            }' >> path_ebpf.go
+	@echo '        }' >> path_ebpf.go
+	@echo '        return nil' >> path_ebpf.go
+	@echo '    })' >> path_ebpf.go
+	@echo '}' >> path_ebpf.go
 	GOOS= GOARCH= go run patch_ebpf.go
 	rm patch_ebpf.go
 
