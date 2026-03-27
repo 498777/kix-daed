@@ -80,10 +80,21 @@ jobs:
         with:
           go-version: '1.24'
           cache: true
-      - uses: actions/setup-node@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: latest
-      - uses: pnpm/action-setup@v4
+          node-version: '22' # 对齐官方资料要求的 v22+
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        # 不再手动指定版本，自动读取 package.json 避免冲突
+
+      - name: Configure GitHub Packages Registry
+        # 核心修复：解决 @daeuniverse 域下私有/托管包的拉取问题
+        run: |
+          echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
 
       - name: Build with Makefile
         env:
