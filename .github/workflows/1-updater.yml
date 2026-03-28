@@ -1,4 +1,4 @@
-name: Sync Upstream & Deep Cleanup
+name: 1 - Sync Upstream & Deep Cleanup
 
 on:
   schedule:
