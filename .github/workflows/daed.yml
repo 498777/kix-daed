@@ -67,15 +67,14 @@ jobs:
         with:
           path: my-config
 
-      - name: Inject Custom Makefile & Patches
+      - name: Inject Custom Makefile
         run: |
           cp my-config/kix-daed/Makefile ./Makefile
-          cp -r my-config/kix-daed/patch ./patch
 
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libelf-dev libcap-dev build-essential git pkg-config linux-headers-generic
+          sudo apt-get install -y clang-15 llvm-15 libelf-dev libcap-dev build-essential git pkg-config linux-headers-generic
 
       - name: Setup Toolchains
         uses: actions/setup-go@v5
@@ -106,6 +105,9 @@ jobs:
           D_SHA: ${{ needs.check-versions.outputs.daed_sha }}
           W_SHA: ${{ needs.check-versions.outputs.wing_sha }}
           C_SHA: ${{ needs.check-versions.outputs.core_sha }}
+          GOEXPERIMENT: "newinliner,simd"
+          CLANG: clang-15
+          STRIP: llvm-strip-15
           TURBO_TELEMETRY_DISABLED: 1
         run: make all
 
@@ -120,10 +122,13 @@ jobs:
           tag_name: ${{ needs.check-versions.outputs.tag_name }}
           files: bin/daed-*
           body: |
-            ## 自动构建报告
+            ## 自动构建报告 (Performance Optimized)
             - **daed**: `${{ needs.check-versions.outputs.daed_sha }}`
             - **wing**: `${{ needs.check-versions.outputs.wing_sha }}`
             - **core**: `olicesx/dae` @ `${{ needs.check-versions.outputs.core_sha }}`
+            - **Compiler**: Go 1.26.1, Clang 15
+            - **Optimization**: `newinliner`, `simd`
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
