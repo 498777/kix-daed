@@ -10,7 +10,7 @@ export GOEXPERIMENT := newinliner,simd
 # 版本号
 D_SHA ?= 819e043
 W_SHA ?= 6bb6a31
-C_SHA ?= 0837cdb
+C_SHA ?= 1f599ff
 
 ifeq ($(VERSION),)
     FULL_VERSION := daed_$(D_SHA)-wing_$(W_SHA)-core_$(C_SHA)
