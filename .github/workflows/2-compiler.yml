@@ -1,4 +1,4 @@
-name: Auto Build daed Binary
+name: 2 - Auto Build daed Binary
 
 on:
   workflow_dispatch:
