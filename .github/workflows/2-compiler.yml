@@ -7,7 +7,6 @@ on:
       - main
     paths:
       - 'daed/Makefile'  # 仅当 Makefile 版本更新或手动修改时触发，节省资源
-      - 'my-config/**'   # 你的自定义配置修改时也触发
 
 jobs:
   check-versions:
