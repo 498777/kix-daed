@@ -53,16 +53,39 @@ jobs:
 
       - name: Build Web
         run: |
+          # 1. 认证配置
           echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
-          pnpm add vscode-languageserver vscode-languageserver-textdocument vscode-jsonrpc vscode-languageserver-types vscode-languageserver-protocol -w
+          
+          # 2. 补齐依赖
+          cd packages/dae-lsp
+          pnpm add vscode-languageserver vscode-languageserver-textdocument vscode-jsonrpc vscode-languageserver-types vscode-languageserver-protocol -D
+          cd ../..
           pnpm install --no-frozen-lockfile
-          echo "=== DEBUG: Current tsdown.config.ts ==="
-          cat packages/dae-lsp/tsdown.config.ts
-          echo "========================================="
-          sed -i 's/defineConfig({/defineConfig({ inlineOnly: false,/g' packages/dae-lsp/tsdown.config.ts || \
-          sed -i '' 's/defineConfig({/defineConfig({ inlineOnly: false,/g' packages/dae-lsp/tsdown.config.ts
-          pnpm turbo run build --filter=@daeuniverse/dae-node-parser --filter=@daeuniverse/dae-editor --filter=@daeuniverse/dae-lsp --filter=dae
+          
+          # 3. 强行加入 inlineOnly: false
+          cat > packages/dae-lsp/tsdown.config.ts <<EOF
+          import { defineConfig } from 'tsdown'
+          export default defineConfig({
+            inlineOnly: false,
+            entry: { 
+              'mod': 'src/mod.ts',
+              'server.bundled': 'src/server-node.ts',
+              'server': 'src/server-node.ts',
+              'server.browser': 'src/browser-server.ts' 
+            },
+            format: ['cjs', 'esm'],
+            dts: true,
+            clean: false,
+            sourcemap: true,
+          })
+          EOF
+
+          # 4. 执行编译
+          # 注意：filter 必须匹配 package.json 里的 name
+          pnpm turbo run build --filter=daed...
+          
+          # 5. 产物提取
           mkdir -p dist && cp -r apps/web/dist/* ./dist/
           
   build-backend:
