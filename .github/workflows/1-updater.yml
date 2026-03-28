@@ -62,16 +62,21 @@ jobs:
           sed -i "s/CORE_VERSION:=.*/CORE_VERSION:=core-${{ steps.check.outputs.core_short }}/" "$MK"
           sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${{ steps.check.outputs.daed_full }}/" "$MK"
           
-          # 处理 init 脚本和换行符（自动搜索 kix-daed 目录下所有 .init）
+          # 处理脚本格式
           find kix-daed -type f -name "*.init" -exec dos2unix {} \;
           find kix-daed -type f -name "*.init" -exec chmod 755 {} \;
+
+          # --- 核心修复：检查是否有变动 ---
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No changes detected in Makefile, skipping commit."
+            exit 0
+          fi
 
           git config --global user.email "bot@github.com"
           git config --global user.name "VersionBot"
           git add .
           git commit -m "chore: bump daed to ${{ steps.check.outputs.pkg_ver }} (${{ steps.check.outputs.daed_short }})"
           git push origin main
-
       # --- 清理逻辑保持不变 ---
       - name: Delete Older Releases
         uses: dev-drprasad/delete-older-releases@master
