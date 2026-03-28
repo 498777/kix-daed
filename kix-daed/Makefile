@@ -1,13 +1,13 @@
 NAME := daed
 BIN_DIR := bin
 
-# 核心工具链与版本
+# 1. 核心工具链
 CLANG_VER := 15
 export CLANG := clang-$(CLANG_VER)
 export STRIP := llvm-strip-$(CLANG_VER)
 export GOEXPERIMENT := newinliner,simd
 
-# 版本号
+# 2. 版本号
 D_SHA ?= 819e043
 W_SHA ?= 6bb6a31
 C_SHA ?= 1f599ff
@@ -18,6 +18,7 @@ else
     FULL_VERSION := $(VERSION)
 endif
 
+# 3. 输出路径
 ifeq ($(BINARY_NAME),)
     FINAL_BINARY := $(BIN_DIR)/$(NAME)-$(GOARCH)
 else
