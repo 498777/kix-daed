@@ -55,29 +55,27 @@ jobs:
         run: |
           MK="${{ steps.check.outputs.target_mk }}"
           
-          # 批量替换
-          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${{ steps.check.outputs.pkg_ver }}/" "$MK"
-          sed -i "s/DAED_VERSION:=.*/DAED_VERSION:=daed-${{ steps.check.outputs.daed_short }}/" "$MK"
-          sed -i "s/WING_VERSION:=.*/WING_VERSION:=wing-${{ steps.check.outputs.wing_short }}/" "$MK"
-          sed -i "s/CORE_VERSION:=.*/CORE_VERSION:=core-${{ steps.check.outputs.core_short }}/" "$MK"
-          sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${{ steps.check.outputs.daed_full }}/" "$MK"
-          
-          # 处理脚本格式
-          find kix-daed -type f -name "*.init" -exec dos2unix {} \;
-          find kix-daed -type f -name "*.init" -exec chmod 755 {} \;
+          # 针对你的 Makefile 特有变量进行替换
+          sed -i "s/^\(D_SHA[[:space:]]*[?:]=[[:space:]]*\).*/\1${{ steps.check.outputs.daed_short }}/" "$MK"
+          sed -i "s/^\(W_SHA[[:space:]]*[?:]=[[:space:]]*\).*/\1${{ steps.check.outputs.wing_short }}/" "$MK"
+          sed -i "s/^\(C_SHA[[:space:]]*[?:]=[[:space:]]*\).*/\1${{ steps.check.outputs.core_short }}/" "$MK"
 
-          # --- 核心修复：检查是否有变动 ---
+          # 打印调试，确认变量已更新
+          echo "---- Makefile Check ----"
+          grep -E "_SHA" "$MK"
+
+          # 检查变动并提交
           if [ -z "$(git status --porcelain)" ]; then
-            echo "No changes detected in Makefile, skipping commit."
+            echo "No changes detected, skipping commit."
             exit 0
           fi
 
           git config --global user.email "bot@github.com"
           git config --global user.name "VersionBot"
           git add .
-          git commit -m "chore: bump daed to ${{ steps.check.outputs.pkg_ver }} (${{ steps.check.outputs.daed_short }})"
+          git commit -m "chore: update component SHAs to ${{ steps.check.outputs.daed_short }}"
           git push origin main
-      # --- 清理逻辑保持不变 ---
+
       - name: Delete Older Releases
         uses: dev-drprasad/delete-older-releases@master
         with:
