@@ -1,16 +1,28 @@
 NAME := daed
 BIN_DIR := bin
 
-# 1. 核心工具链与版本
+# 核心工具链与版本
 CLANG_VER := 15
 export CLANG := clang-$(CLANG_VER)
 export STRIP := llvm-strip-$(CLANG_VER)
 export GOEXPERIMENT := newinliner,simd
 
+# 版本号
 D_SHA ?= 819e043
 W_SHA ?= 6bb6a31
 C_SHA ?= 0837cdb
-FULL_VERSION := daed_$(D_SHA)-wing_$(W_SHA)-core_$(C_SHA)
+
+ifeq ($(VERSION),)
+    FULL_VERSION := daed_$(D_SHA)-wing_$(W_SHA)-core_$(C_SHA)
+else
+    FULL_VERSION := $(VERSION)
+endif
+
+ifeq ($(BINARY_NAME),)
+    FINAL_BINARY := $(BIN_DIR)/$(NAME)-$(GOARCH)
+else
+    FINAL_BINARY := ../$(BINARY_NAME)
+endif
 
 .PHONY: all prepare build-web build-backend
 
@@ -43,15 +55,10 @@ build-backend:
 	cd wing && CGO_ENABLED=0 go mod tidy
 
 	@echo "==> 5. 源码级硬核注入..."
-	# 5.1 资源路径强制对齐
 	grep -rl "/usr/local/share/dae-wing" wing | xargs -r sed -i 's|/usr/local/share/dae-wing|/usr/share/daed|g'
 	grep -rl "/usr/share/v2ray" wing | xargs -r sed -i 's|/usr/share/v2ray|/usr/share/daed|g'
-	
-	# 5.2 数据库与配置目录硬核改写
 	find wing -name "*.go" -exec sed -i 's|configDir, "wing.db"|"/etc/daed/wing.db"|g' {} +
 	find wing -name "*.go" -exec sed -i 's|configDir, "config.geand"|"/etc/daed/config.geand"|g' {} +
-	
-	# 5.3 修正 cmd/run.go 中的默认配置路径
 	find wing/cmd -name "*.go" -exec sed -i 's|/etc/dae-wing|/etc/daed|g' {} +
 
 	@echo "==> 6. 编译 eBPF..."
@@ -60,10 +67,7 @@ build-backend:
 	@echo "==> 7. 准备前端资源..."
 	rm -rf wing/webrender/web
 	mkdir -p wing/webrender/web
-
 	cp -r dist/* wing/webrender/web/
-	
-	# 生成嵌入代码
 	cd wing && unset GOOS && unset GOARCH && go generate -v ./...
 
 	@echo "==> 8. 最终编译..."
@@ -72,10 +76,9 @@ build-backend:
 		-X github.com/daeuniverse/dae-wing/db.AppVersion=$(FULL_VERSION) \
 		-X github.com/daeuniverse/dae-wing/db.AppName=daed)
 
-	cd wing && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -v -trimpath \
+	cd wing && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) GOAMD64=$(GOAMD64) go build -v -trimpath \
 		-ldflags "$(FINAL_LDFLAGS)" \
 		-tags "kernelext embedallowed $(shell cat wing/dae-core/.build_tags 2>/dev/null)" \
-		-o ../$(BIN_DIR)/$(NAME)-$(GOARCH) .
+		-o $(FINAL_BINARY) .
 	
-	chmod +x $(BIN_DIR)/$(NAME)-$(GOARCH)
-	@echo "==> 编译完成: $(BIN_DIR)/$(NAME)-$(GOARCH)"
+	@echo "==> 编译完成: $(FINAL_BINARY)"
