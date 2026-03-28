@@ -25,62 +25,49 @@ jobs:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Extract Versions from Makefile
+      - name: Extract Versions & Format Tag
         id: vars
         run: |
-          # 核心修复：使用 ^ 确保只匹配行首定义的变量，排除 FULL_VERSION 中的引用
           D=$(grep "^D_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
           W=$(grep "^W_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
           C=$(grep "^C_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
           
-          echo "daed=$D" >> $GITHUB_OUTPUT
-          echo "wing=$W" >> $GITHUB_OUTPUT
-          echo "core=$C" >> $GITHUB_OUTPUT
+          echo "daed=${D:0:7}" >> $GITHUB_OUTPUT
+          echo "wing=${W:0:7}" >> $GITHUB_OUTPUT
+          echo "core=${C:0:7}" >> $GITHUB_OUTPUT
           
-          # 生成带时间戳的 Tag
-          CUR_TIME=$(date +'%Y.%m.%d-r%H%M')
-          echo "full_tag=daed_$CUR_TIME" >> $GITHUB_OUTPUT
+          # 对齐图片格式：daed_2026.03.28-r[运行次数]
+          echo "full_tag=daed_$(date +'%Y.%m.%d')-r${{ github.run_number }}" >> $GITHUB_OUTPUT
 
   build-web:
     needs: check-versions
-    runs-on: ubuntu-latest  # 官方用 macos 是为了 release-please，我们编译 web 用 ubuntu 足够且快
+    runs-on: macos-latest
     steps:
-      - name: Checkout daed
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: daeuniverse/daed
+          ref: ${{ needs.check-versions.outputs.daed_sha }}
 
-      - name: Setup Node.js & pnpm
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: 'latest'
+          cache: 'pnpm'
       - uses: pnpm/action-setup@v4
         with:
           version: 10.24.0
 
-      - name: Build Web Assets
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
+      - name: Build Web
         run: |
-          # 1. 注入官方仓库认证
           echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
-          
-          # 2. 安装依赖
           pnpm install --no-frozen-lockfile
-          
-          # 3. 使用 --filter daed 锁定前端项目，忽略其他 packages
           pnpm build --filter daed
-          
-          # 4. 准备产物路径在 apps/web/dist
-          mkdir -p dist_ready
-          cp -r apps/web/dist/* ./dist_ready/
+          mkdir -p dist && cp -r apps/web/dist/* ./dist/
 
-      - name: Upload Web Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: web-dist
-          path: dist_ready/
+          path: dist/
           retention-days: 1
   
   build-backend:
@@ -88,13 +75,20 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goarch: [amd64, arm64]
+        include:
+          - goarch: amd64
+            goamd64: v3
+            asset_name: amd64-v3
+          - goarch: arm64
+            goamd64: v1
+            asset_name: arm64
     steps:
       - name: Checkout Official daed
         uses: actions/checkout@v4
         with:
           repository: daeuniverse/daed
-          fetch-depth: 0
+          ref: ${{ needs.check-versions.outputs.daed_sha }}
+          submodules: recursive
 
       - name: Checkout My Custom Config
         uses: actions/checkout@v4
@@ -107,52 +101,38 @@ jobs:
           name: web-dist
           path: dist
 
-      - name: Inject Custom Makefile
-        run: cp my-config/kix-daed/Makefile ./Makefile
-
-      - name: Deep Cleanup Runner Memory
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
-          sudo apt-get clean
-          docker rmi $(docker images -q) || true
-
-      - name: Install Build Toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-15 llvm-15 libelf-dev libcap-dev build-essential git pkg-config
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.1'
-          cache: true
-
-      - name: Execute Makefile Build
+      - name: Execute Build
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
+          GOAMD64: ${{ matrix.goamd64 }}
+          VERSION: ${{ needs.check-versions.outputs.tag_name }}
           D_SHA: ${{ needs.check-versions.outputs.daed_sha }}
           W_SHA: ${{ needs.check-versions.outputs.wing_sha }}
           C_SHA: ${{ needs.check-versions.outputs.core_sha }}
           GOEXPERIMENT: "newinliner,simd"
           CLANG: clang-15
           STRIP: llvm-strip-15
-        run: make build-backend
+          # 核心：通过环境变量告诉 Makefile 输出文件名
+          BINARY_NAME: bin/daed-${{ matrix.asset_name }}
+        run: |
+          cp my-config/kix-daed/Makefile ./Makefile
+          sudo apt-get update && sudo apt-get install -y clang-15 llvm-15 libelf-dev libcap-dev
+          # 直接执行编译，Makefile 内部需支持使用 $BINARY_NAME
+          make build-backend
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check-versions.outputs.tag_name }}
-          files: bin/daed-*
+          # 直接上传 Makefile 产出的精确文件
+          files: bin/daed-${{ matrix.asset_name }}
           body: |
-            ### 🚀 Optimized Build for ARM64/AMD64
-
             ### 🛠️ Build Components
             - **daed**: `${{ needs.check-versions.outputs.daed_sha }}`
             - **wing**: `${{ needs.check-versions.outputs.wing_sha }}`
             - **core**: `olicesx/dae@${{ needs.check-versions.outputs.core_sha }}`
-
-            > ℹ️ **Assets**: Embedded (Size: ~42MB)
+            
             > ℹ️ **Default assets path**: `/usr/share/daed/`, **DB path**: `/etc/daed/wing.db`
           generate_release_notes: false
         env:
