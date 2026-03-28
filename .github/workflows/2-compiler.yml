@@ -28,15 +28,18 @@ jobs:
       - name: Extract Versions from Makefile
         id: vars
         run: |
-          # 从 Makefile 提取值
-          D=$(grep "D_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
-          W=$(grep "W_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
-          C=$(grep "C_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
+          # 核心修复：使用 ^ 确保只匹配行首定义的变量，排除 FULL_VERSION 中的引用
+          D=$(grep "^D_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
+          W=$(grep "^W_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
+          C=$(grep "^C_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
           
           echo "daed=$D" >> $GITHUB_OUTPUT
           echo "wing=$W" >> $GITHUB_OUTPUT
           echo "core=$C" >> $GITHUB_OUTPUT
-          echo "full_tag=daed_$(date +'%Y.%m.%d')-r$(date +%H%M)" >> $GITHUB_OUTPUT
+          
+          # 生成带时间戳的 Tag
+          CUR_TIME=$(date +'%Y.%m.%d-r%H%M')
+          echo "full_tag=daed_$CUR_TIME" >> $GITHUB_OUTPUT
 
   build-web:
     needs: check-versions
@@ -57,13 +60,11 @@ jobs:
 
       - name: Build Web Assets
         run: |
-          # 注入私有仓库认证
           echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
           pnpm install --no-frozen-lockfile
           TURBO_TELEMETRY_DISABLED=1 pnpm build
           
-          # 路径适配：确保 dist_ready 包含所有构建产物
           mkdir -p dist_ready
           if [ -d "apps/web/dist" ]; then 
             cp -r apps/web/dist/* ./dist_ready/
@@ -100,7 +101,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: web-dist
-          path: dist # 这里的路径会对应 Makefile 中的 cp -r dist/.
+          path: dist
 
       - name: Inject Custom Makefile
         run: cp my-config/kix-daed/Makefile ./Makefile
