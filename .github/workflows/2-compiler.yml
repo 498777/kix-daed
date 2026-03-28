@@ -6,7 +6,12 @@ on:
     branches:
       - main
     paths:
-      - 'daed/Makefile'  # 仅当 Makefile 版本更新或手动修改时触发，节省资源
+      - 'kix-daed/Makefile'
+
+  workflow_run:
+    workflows: ["1 - Sync Upstream & Deep Cleanup"]
+    types:
+      - completed
 
 jobs:
   check-versions:
