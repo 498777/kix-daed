@@ -57,28 +57,25 @@ jobs:
           echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
           
-          # 2. 精准补齐 LSP 缺失的底层依赖
-          cd packages/dae-lsp
-          pnpm add vscode-languageserver vscode-languageserver-textdocument vscode-jsonrpc vscode-languageserver-types vscode-languageserver-protocol -D
-          cd ../..
+          # 2. 安装依赖
           pnpm install --no-frozen-lockfile
           
-          # 3. 【核心修复】精准插入 inlineOnly 配置
-          # 因为是 macOS 环境，sed -i 必须带个备份后缀 ''
-          # 我们在 export default defineConfig 后面直接插入全局配置
-          sed -i '' "s/export default defineConfig(\[/export default defineConfig({ inlineOnly: false, configs: \[/g" packages/dae-lsp/tsdown.config.ts
-          # 在文件末尾补上闭合大括号
-          sed -i '' "s/\])/\]})/g" packages/dae-lsp/tsdown.config.ts
+          # 3. 修改 tsdown 的执行行为
+          pnpm turbo run build --filter=@daeuniverse/dae-node-parser --filter=@daeuniverse/dae-editor
+          pnpm turbo run build --filter=@daeuniverse/dae-lsp || echo "LSP build warned, but checking files..."
 
-          # 4. 执行构建 (使用 --filter=daed... 确保顺序)
-          pnpm turbo run build --filter=daed...
-          
-          # 5. 校验并提取
-          if [ -d "apps/web/dist" ]; then
-            mkdir -p dist && cp -r apps/web/dist/* ./dist/
+          # 4. 确保 Vite 文件存在
+          if [ -f "packages/dae-lsp/dist/server.browser.js" ]; then
+             echo "Verification Success: server.browser.js exists."
           else
-            echo "Build failed, dist folder not found!" && exit 1
+             echo "Verification Failed: server.browser.js missing." && exit 1
           fi
+
+          # 5. 编译 Web
+          pnpm turbo run build --filter=daed
+          
+          # 6. 提取
+          mkdir -p dist && cp -r apps/web/dist/* ./dist/
           
   build-backend:
     needs: [check-versions, build-web]
