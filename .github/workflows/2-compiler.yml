@@ -17,20 +17,25 @@ jobs:
   check-versions:
     runs-on: ubuntu-latest
     outputs:
-      tag_name: ${{ steps.shas.outputs.full_tag }}
-      daed_sha: ${{ steps.shas.outputs.daed }}
-      wing_sha: ${{ steps.shas.outputs.wing }}
-      core_sha: ${{ steps.shas.outputs.core }}
+      tag_name: ${{ steps.vars.outputs.full_tag }}
+      daed_sha: ${{ steps.vars.outputs.daed }}
+      wing_sha: ${{ steps.vars.outputs.wing }}
+      core_sha: ${{ steps.vars.outputs.core }}
     steps:
-      - name: Fetch Latest SHAs
-        id: shas
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Extract Versions from Makefile
+        id: vars
         run: |
-          DAED=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r .sha)
-          WING=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r .sha)
-          CORE=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r .sha)
-          echo "daed=${DAED:0:7}" >> $GITHUB_OUTPUT
-          echo "wing=${WING:0:7}" >> $GITHUB_OUTPUT
-          echo "core=${CORE:0:7}" >> $GITHUB_OUTPUT
+          # 从 Makefile 提取值
+          D=$(grep "D_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
+          W=$(grep "W_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
+          C=$(grep "C_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
+          
+          echo "daed=$D" >> $GITHUB_OUTPUT
+          echo "wing=$W" >> $GITHUB_OUTPUT
+          echo "core=$C" >> $GITHUB_OUTPUT
           echo "full_tag=daed_$(date +'%Y.%m.%d')-r$(date +%H%M)" >> $GITHUB_OUTPUT
 
   build-web:
