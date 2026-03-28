@@ -42,12 +42,14 @@ jobs:
       - name: Switch to SHA
         run: git checkout ${{ needs.check-versions.outputs.daed_full }}
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.24.0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 'latest'
           cache: 'pnpm'
-      - uses: pnpm/action-setup@v4
-        with: { version: 10.24.0 }
 
       - name: Build Web
         run: |
@@ -59,7 +61,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with: { name: web-dist, path: dist/, retention-days: 1 }
-
   build-backend:
     needs: [check-versions, build-web]
     runs-on: ubuntu-latest
