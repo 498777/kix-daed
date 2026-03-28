@@ -112,6 +112,11 @@ jobs:
           TURBO_TELEMETRY_DISABLED: 1
         run: make all
 
+      - name: Finalize Permissions
+        run: |
+          chmod +x bin/daed-*
+          ls -l bin/
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
