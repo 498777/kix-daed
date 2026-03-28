@@ -1,62 +1,80 @@
-name: Auto Build daed & Deep Cleanup
+name: Auto Build daed Binary
 
 on:
-  schedule:
-    - cron: '0 * * * *'
   workflow_dispatch:
-
-permissions:
-  contents: write
-  actions: write
+  push:
+    branches:
+      - main
+    paths:
+      - 'daed/Makefile'  # 仅当 Makefile 版本更新或手动修改时触发，节省资源
+      - 'my-config/**'   # 你的自定义配置修改时也触发
 
 jobs:
   check-versions:
     runs-on: ubuntu-latest
     outputs:
-      has_updates: ${{ steps.compare.outputs.has_updates }}
-      tag_name: ${{ steps.compare.outputs.tag_name }}
+      tag_name: ${{ steps.shas.outputs.full_tag }}
       daed_sha: ${{ steps.shas.outputs.daed }}
       wing_sha: ${{ steps.shas.outputs.wing }}
       core_sha: ${{ steps.shas.outputs.core }}
     steps:
-      - name: Fetch Latest SHAs & Generate Tag
+      - name: Fetch Latest SHAs
         id: shas
         run: |
           DAED=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r .sha)
           WING=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main | jq -r .sha)
           CORE=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r .sha)
-          
           echo "daed=${DAED:0:7}" >> $GITHUB_OUTPUT
           echo "wing=${WING:0:7}" >> $GITHUB_OUTPUT
           echo "core=${CORE:0:7}" >> $GITHUB_OUTPUT
+          echo "full_tag=daed_$(date +'%Y.%m.%d')-r$(date +%H%M)" >> $GITHUB_OUTPUT
 
-          DATE_STR=$(date +'%Y.%m.%d')
-          BASE_TAG="daed_${DATE_STR}"
-          
-          EXISTING_REVS=$(git ls-remote --tags origin "${BASE_TAG}-r*" | awk -F'-r' '{print $2}' | sort -n)
-          if [ -z "$EXISTING_REVS" ]; then
-            REV=1
-          else
-            REV=$(($(echo "$EXISTING_REVS" | tail -n1) + 1))
-          fi
-          
-          echo "full_tag=${BASE_TAG}-r${REV}" >> $GITHUB_OUTPUT
-
-      - name: Compare with Existing Tags
-        id: compare
-        run: |
-          echo "has_updates=true" >> $GITHUB_OUTPUT
-          echo "tag_name=${{ steps.shas.outputs.full_tag }}" >> $GITHUB_OUTPUT
-
-  build:
+  build-web:
     needs: check-versions
-    if: needs.check-versions.outputs.has_updates == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout daed
+        uses: actions/checkout@v4
+        with:
+          repository: daeuniverse/daed
+
+      - name: Setup Node.js & pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.24.0
+
+      - name: Build Web Assets
+        run: |
+          # 注入私有仓库认证
+          echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
+          pnpm install --no-frozen-lockfile
+          TURBO_TELEMETRY_DISABLED=1 pnpm build
+          
+          # 路径适配：确保 dist_ready 包含所有构建产物
+          mkdir -p dist_ready
+          if [ -d "apps/web/dist" ]; then 
+            cp -r apps/web/dist/* ./dist_ready/
+          else 
+            cp -r dist/* ./dist_ready/
+          fi
+
+      - name: Upload Web Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: dist_ready/
+          retention-days: 1
+
+  build-backend:
+    needs: [check-versions, build-web]
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - goarch: amd64
-          - goarch: arm64
+        goarch: [amd64, arm64]
     steps:
       - name: Checkout Official daed
         uses: actions/checkout@v4
@@ -64,42 +82,38 @@ jobs:
           repository: daeuniverse/daed
           fetch-depth: 0
 
-      - name: Checkout Your Custom Config
+      - name: Checkout My Custom Config
         uses: actions/checkout@v4
         with:
           path: my-config
 
+      - name: Download Web Dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: dist # 这里的路径会对应 Makefile 中的 cp -r dist/.
+
       - name: Inject Custom Makefile
         run: cp my-config/kix-daed/Makefile ./Makefile
 
-      - name: Install Build Dependencies
+      - name: Deep Cleanup Runner Memory
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          sudo apt-get clean
+          docker rmi $(docker images -q) || true
+
+      - name: Install Build Toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-15 llvm-15 libelf-dev libcap-dev build-essential git pkg-config linux-headers-generic
+          sudo apt-get install -y clang-15 llvm-15 libelf-dev libcap-dev build-essential git pkg-config
 
-      - name: Setup Toolchains
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.26.1'
           cache: true
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.24.0
-
-      - name: Configure Registry
-        run: |
-          echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
-          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
-          find . -name "tsdown.config.ts" -exec sed -i "s/target: '.*',/& inlineOnly: false,/g" {} +
-
-      - name: Build with Makefile
+      - name: Execute Makefile Build
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
@@ -109,13 +123,7 @@ jobs:
           GOEXPERIMENT: "newinliner,simd"
           CLANG: clang-15
           STRIP: llvm-strip-15
-          TURBO_TELEMETRY_DISABLED: 1
-        run: make all
-
-      - name: Finalize Permissions
-        run: |
-          chmod +x bin/daed-*
-          ls -l bin/
+        run: make build-backend
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -123,34 +131,15 @@ jobs:
           tag_name: ${{ needs.check-versions.outputs.tag_name }}
           files: bin/daed-*
           body: |
+            ### 🚀 Optimized Build for ARM64/AMD64
+
             ### 🛠️ Build Components
             - **daed**: `${{ needs.check-versions.outputs.daed_sha }}`
             - **wing**: `${{ needs.check-versions.outputs.wing_sha }}`
             - **core**: `olicesx/dae@${{ needs.check-versions.outputs.core_sha }}`
 
-            > ℹ️ Default assets path: `/usr/share/daed/`, DB path: `/etc/daed/wing.db`
+            > ℹ️ **Assets**: Embedded (Size: ~42MB)
+            > ℹ️ **Default assets path**: `/usr/share/daed/`, **DB path**: `/etc/daed/wing.db`
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-
-  cleanup:
-    needs: [check-versions, build]
-    if: always() 
-    runs-on: ubuntu-latest
-    steps:
-      - name: Delete Older Releases
-        uses: dev-drprasad/delete-older-releases@master
-        with:
-          keep_latest: 3
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-        continue-on-error: true
-
-      - name: Cleanup Workflow Logs
-        uses: Mattraks/delete-workflow-runs@main
-        with:
-          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-          repository: ${{ github.repository }}
-          retain_days: 1
-        continue-on-error: true
