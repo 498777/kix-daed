@@ -55,14 +55,9 @@ jobs:
         run: |
           echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
-
+          pnpm add vscode-languageserver vscode-languageserver-textdocument vscode-jsonrpc vscode-languageserver-types vscode-languageserver-protocol -w
           pnpm install --no-frozen-lockfile
-          
-          # 或者直接进入目录执行，绕开 monorepo 的全局检查
-          cd apps/web
-          pnpm run build
-
-          cd ../..
+          pnpm turbo run build --filter=@daeuniverse/dae-node-parser --filter=@daeuniverse/dae-editor --filter=@daeuniverse/dae-lsp --filter=daed
           mkdir -p dist && cp -r apps/web/dist/* ./dist/
           
   build-backend:
