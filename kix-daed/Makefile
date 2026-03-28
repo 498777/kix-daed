@@ -48,16 +48,19 @@ build-backend:
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	cd wing && CGO_ENABLED=0 go mod tidy
 
-	@echo "==> 5. 源码级路径强力注入..."
+	@echo "==> 5. 源码级路径强力注入 (对齐 R5C 环境) ..."
 	grep -rl "/usr/local/share/dae-wing" wing | xargs -r sed -i 's|/usr/local/share/dae-wing|/usr/share/daed|g'
 	grep -rl "/usr/share/v2ray" wing | xargs -r sed -i 's|/usr/share/v2ray|/usr/share/daed|g'
 	find wing -name "*.go" -exec sed -i 's|Join(.*, "wing.db")|"/etc/daed/wing.db"|g' {} +
-	find wing -name "*.go" -exec sed -i 's|"wing.db"|"/etc/daed/wing.db"|g' {} +
 
-	@echo "==> 6. 编译 eBPF..."
+	@echo "==> 6. 编译 eBPF (olicesx 分支) ..."
 	$(MAKE) -C wing/dae-core ebpf CLANG=$(CLANG) STRIP=$(STRIP) TARGET=bpfel,bpfeb
 
-	@echo "==> 7. 生成 wing 辅助代码..."
+	@echo "==> 7. 准备前端资源嵌入 (Bundle 模拟) ..."
+	rm -rf wing/webrender/web
+	cp -r web/dist wing/webrender/web
+	
+	# 执行 generate 生成嵌入代码（必须在 unset 环境下）
 	cd wing && unset GOOS && unset GOARCH && go generate ./...
 
 	@echo "==> 8. 最终编译..."
@@ -68,7 +71,7 @@ build-backend:
 
 	cd wing && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -v -trimpath \
 		-ldflags "$(FINAL_LDFLAGS)" \
-		-tags "kernelext $(shell cat wing/dae-core/.build_tags 2>/dev/null)" \
+		-tags "kernelext embedallowed $(shell cat wing/dae-core/.build_tags 2>/dev/null)" \
 		-o ../$(BIN_DIR)/$(NAME)-$(GOARCH) .
 	
 	chmod +x $(BIN_DIR)/$(NAME)-$(GOARCH)
