@@ -43,7 +43,7 @@ jobs:
 
   build-web:
     needs: check-versions
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # 官方用 macos 是为了 release-please，我们编译 web 用 ubuntu 足够且快
     steps:
       - name: Checkout daed
         uses: actions/checkout@v4
@@ -59,33 +59,22 @@ jobs:
           version: 10.24.0
 
       - name: Build Web Assets
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: |
-          # 1. 注入认证
+          # 1. 注入官方仓库认证
           echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
           
-          # 2. 安装依赖（全局安装，但重点在于 web）
+          # 2. 安装依赖
           pnpm install --no-frozen-lockfile
           
-          # 3. 核心修复：进入 apps/web 目录直接构建，绕过根目录的 Turbo/LSP 检查
-          # 设置 CI=false 强制忽略警告，避免 tsdown/rolldown 报错
-          cd apps/web
-          CI=false \
-          TURBO_TELEMETRY_DISABLED=1 \
-          DO_NOT_TRACK=1 \
-          pnpm run build
+          # 3. 使用 --filter daed 锁定前端项目，忽略其他 packages
+          pnpm build --filter daed
           
-          # 4. 路径适配：回到根目录准备产物
-          cd ../..
+          # 4. 准备产物路径在 apps/web/dist
           mkdir -p dist_ready
-          if [ -d "apps/web/dist" ]; then 
-            cp -r apps/web/dist/* ./dist_ready/
-            echo "✅ Web build successful in apps/web/dist"
-          else 
-            echo "❌ Error: Could not find dist in apps/web/dist"
-            ls -R apps/web/ # 打印目录结构方便排查
-            exit 1
-          fi
+          cp -r apps/web/dist/* ./dist_ready/
 
       - name: Upload Web Artifact
         uses: actions/upload-artifact@v4
