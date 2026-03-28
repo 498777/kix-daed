@@ -1,0 +1,91 @@
+name: Sync Upstream & Deep Cleanup
+
+on:
+  schedule:
+    - cron: "0 * * * *" # 每小时执行一次
+  workflow_dispatch:
+
+jobs:
+  update-and-clean:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+
+      - name: Check Upstream Updates
+        id: check
+        run: |
+          # 获取各组件最新 SHA
+          DAED_JSON=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main)
+          WING_JSON=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main)
+          CORE_JSON=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes)
+
+          UPSTREAM_DAED_FULL=$(echo "$DAED_JSON" | jq -r '.sha')
+          UPSTREAM_DAED_SHORT=${UPSTREAM_DAED_FULL:0:7}
+          UPSTREAM_WING_SHORT=$(echo "$WING_JSON" | jq -r '.sha' | cut -b 1-7)
+          UPSTREAM_CORE_SHORT=$(echo "$CORE_JSON" | jq -r '.sha' | cut -b 1-7)
+
+          # 读取本地 Makefile 中的当前版本
+          CURRENT_DAED=$(grep "PKG_SOURCE_VERSION:=" daed/Makefile | cut -d= -f2 || true)
+
+          echo "Upstream: $UPSTREAM_DAED_FULL | Local: $CURRENT_DAED"
+
+          if [ "$UPSTREAM_DAED_FULL" != "$CURRENT_DAED" ]; then
+            echo "update_needed=true" >> $GITHUB_OUTPUT
+            echo "daed_full=$UPSTREAM_DAED_FULL" >> $GITHUB_OUTPUT
+            echo "daed_short=$UPSTREAM_DAED_SHORT" >> $GITHUB_OUTPUT
+            echo "wing_short=$UPSTREAM_WING_SHORT" >> $GITHUB_OUTPUT
+            echo "core_short=$UPSTREAM_CORE_SHORT" >> $GITHUB_OUTPUT
+            
+            # 生成日期版本号
+            LATEST_DATE=$(echo -e "$(echo "$DAED_JSON" | jq -r '.commit.committer.date')\n$(echo "$WING_JSON" | jq -r '.commit.committer.date')\n$(echo "$CORE_JSON" | jq -r '.commit.committer.date')" | sort -r | head -n 1)
+            echo "pkg_ver=$(date -d "$LATEST_DATE" +%Y.%m.%d)" >> $GITHUB_OUTPUT
+          else
+            echo "update_needed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update Makefile & Push
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${{ steps.check.outputs.pkg_ver }}/" ./daed/Makefile
+          sed -i "s/DAED_VERSION:=.*/DAED_VERSION:=daed-${{ steps.check.outputs.daed_short }}/" ./daed/Makefile
+          sed -i "s/WING_VERSION:=.*/WING_VERSION:=wing-${{ steps.check.outputs.wing_short }}/" ./daed/Makefile
+          sed -i "s/CORE_VERSION:=.*/CORE_VERSION:=core-${{ steps.check.outputs.core_short }}/" ./daed/Makefile
+          sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${{ steps.check.outputs.daed_full }}/" ./daed/Makefile
+          
+          find . -type f -name "*.init" -exec dos2unix {} \;
+          chmod 755 ./daed/files/daed.init
+
+          git config --global user.email "bot@github.com"
+          git config --global user.name "VersionBot"
+          git add .
+          git commit -m "chore: bump daed to ${{ steps.check.outputs.pkg_ver }} (${{ steps.check.outputs.daed_short }})"
+          git push origin main
+
+      - name: Delete Older Releases
+        uses: dev-drprasad/delete-older-releases@master
+        with:
+          keep_latest: 3
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+        continue-on-error: true
+
+      - name: Cleanup Workflow Logs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          repository: ${{ github.repository }}
+          retain_days: 1
+          keep_minimum_runs: 3
+        continue-on-error: true
+
+      - name: Remove Old Artifacts
+        uses: c-hive/gha-remove-artifacts@master
+        with:
+          age: '1 days'
+          skip-recent: 3
+        continue-on-error: true
