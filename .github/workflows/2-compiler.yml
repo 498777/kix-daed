@@ -3,40 +3,32 @@ name: 2 - Auto Build daed Binary
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-    paths:
-      - 'kix-daed/Makefile'
-
+    branches: [main]
+    paths: ['kix-daed/Makefile']
   workflow_run:
     workflows: ["1 - Sync Upstream & Deep Cleanup"]
-    types:
-      - completed
+    types: [completed]
 
 jobs:
   check-versions:
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.vars.outputs.full_tag }}
-      daed_sha: ${{ steps.vars.outputs.daed }}
-      wing_sha: ${{ steps.vars.outputs.wing }}
-      core_sha: ${{ steps.vars.outputs.core }}
+      daed_full: ${{ steps.vars.outputs.daed_full }}
+      daed: ${{ steps.vars.outputs.daed }}
+      wing: ${{ steps.vars.outputs.wing }}
+      core: ${{ steps.vars.outputs.core }}
     steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v4
-
-      - name: Extract Versions & Format Tag
-        id: vars
+      - uses: actions/checkout@v4
+      - id: vars
         run: |
           D=$(grep "^D_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
           W=$(grep "^W_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
           C=$(grep "^C_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
-          
+          echo "daed_full=$D" >> $GITHUB_OUTPUT
           echo "daed=${D:0:7}" >> $GITHUB_OUTPUT
           echo "wing=${W:0:7}" >> $GITHUB_OUTPUT
           echo "core=${C:0:7}" >> $GITHUB_OUTPUT
-          
-          # 对齐图片格式：daed_2026.03.28-r[运行次数]
           echo "full_tag=daed_$(date +'%Y.%m.%d')-r${{ github.run_number }}" >> $GITHUB_OUTPUT
 
   build-web:
@@ -46,30 +38,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: daeuniverse/daed
-          ref: ${{ needs.check-versions.outputs.daed_sha }}
-
+          ref: ${{ needs.check-versions.outputs.daed_full }}
       - uses: actions/setup-node@v4
         with:
           node-version: 'latest'
           cache: 'pnpm'
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10.24.0
-
-      - name: Build Web
-        run: |
+        with: { version: 10.24.0 }
+      - run: |
           echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
           pnpm install --no-frozen-lockfile
           pnpm build --filter daed
           mkdir -p dist && cp -r apps/web/dist/* ./dist/
-
       - uses: actions/upload-artifact@v4
-        with:
-          name: web-dist
-          path: dist/
-          retention-days: 1
-  
+        with: { name: web-dist, path: dist/, retention-days: 1 }
+
   build-backend:
     needs: [check-versions, build-web]
     runs-on: ubuntu-latest
@@ -83,57 +67,36 @@ jobs:
             goamd64: v1
             asset_name: arm64
     steps:
-      - name: Checkout Official daed
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: daeuniverse/daed
-          ref: ${{ needs.check-versions.outputs.daed_sha }}
+          ref: ${{ needs.check-versions.outputs.daed_full }}
           submodules: recursive
-
-      - name: Checkout My Custom Config
-        uses: actions/checkout@v4
-        with:
-          path: my-config
-
-      - name: Download Web Dist
-        uses: actions/download-artifact@v4
-        with:
-          name: web-dist
-          path: dist
-
+      - uses: actions/checkout@v4
+        with: { path: my-config }
+      - uses: actions/download-artifact@v4
+        with: { name: web-dist, path: dist }
       - name: Execute Build
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           GOAMD64: ${{ matrix.goamd64 }}
           VERSION: ${{ needs.check-versions.outputs.tag_name }}
-          D_SHA: ${{ needs.check-versions.outputs.daed_sha }}
-          W_SHA: ${{ needs.check-versions.outputs.wing_sha }}
-          C_SHA: ${{ needs.check-versions.outputs.core_sha }}
-          GOEXPERIMENT: "newinliner,simd"
-          CLANG: clang-15
-          STRIP: llvm-strip-15
-          # 核心：通过环境变量告诉 Makefile 输出文件名
           BINARY_NAME: bin/daed-${{ matrix.asset_name }}
         run: |
           cp my-config/kix-daed/Makefile ./Makefile
           sudo apt-get update && sudo apt-get install -y clang-15 llvm-15 libelf-dev libcap-dev
-          # 直接执行编译，Makefile 内部需支持使用 $BINARY_NAME
           make build-backend
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check-versions.outputs.tag_name }}
-          # 直接上传 Makefile 产出的精确文件
           files: bin/daed-${{ matrix.asset_name }}
           body: |
             ### 🛠️ Build Components
-            - **daed**: `${{ needs.check-versions.outputs.daed_sha }}`
-            - **wing**: `${{ needs.check-versions.outputs.wing_sha }}`
-            - **core**: `olicesx/dae@${{ needs.check-versions.outputs.core_sha }}`
+            - **daed**: `${{ needs.check-versions.outputs.daed }}`
+            - **wing**: `${{ needs.check-versions.outputs.wing }}`
+            - **core**: `olicesx/dae@${{ needs.check-versions.outputs.core }}`
             
             > ℹ️ **Default assets path**: `/usr/share/daed/`, **DB path**: `/etc/daed/wing.db`
-          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
