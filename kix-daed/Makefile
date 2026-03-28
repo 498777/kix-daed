@@ -1,6 +1,13 @@
 NAME := daed
 BIN_DIR := bin
 
+export CLANG := clang-15
+export STRIP := llvm-strip-15
+export BPF_CLANG := $(CLANG)
+export BPF_STRIP_FLAG := $(STRIP)
+export BPF_TRACE_TARGET := bpf
+export BPF_CFLAGS := -I./headers -O2 -g -Wall
+
 D_SHA ?= $(shell git rev-parse --short HEAD)
 W_SHA ?= "unknown"
 C_SHA ?= "unknown"
@@ -19,7 +26,7 @@ prepare:
 	git submodule update --init --recursive wing
 	cd wing && \
 		git submodule set-url dae-core https://github.com/olicesx/dae.git && \
-		git submodule update --init --remote dae-core
+		git submodule update --init --remote --recursive dae-core
 	cd wing/dae-core && \
 		git fetch origin optimize/code-quality-fixes && \
 		git checkout optimize/code-quality-fixes
@@ -38,13 +45,7 @@ build-backend:
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	cd wing && CGO_ENABLED=0 go mod tidy
 
-	@echo "==> 正在执行物理替换 (掉包计)..."
-	cp patch/control.go.fixed wing/dae-core/control/control.go
-
-	@echo "==> 验证文件内容 (Debug)..."
-	@cat wing/dae-core/control/control.go
-
-	@echo "==> 强制生成 eBPF 绑定..."
+	@echo "==> 强制生成 eBPF 绑定 (通过环境变量注入工具链)..."
 	cd wing/dae-core && GOOS= GOARCH= go generate -v ./...
 
 	@echo "==> 最终编译..."
