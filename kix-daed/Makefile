@@ -7,9 +7,9 @@ export CLANG := clang-$(CLANG_VER)
 export STRIP := llvm-strip-$(CLANG_VER)
 export GOEXPERIMENT := newinliner,simd
 
-D_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-W_SHA ?= "unknown"
-C_SHA ?= "unknown"
+D_SHA ?= 819e043
+W_SHA ?= 6bb6a31
+C_SHA ?= 0837cdb
 FULL_VERSION := daed_$(D_SHA)-wing_$(W_SHA)-core_$(C_SHA)
 
 .PHONY: all prepare build-web build-backend
