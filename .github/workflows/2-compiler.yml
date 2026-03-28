@@ -53,40 +53,32 @@ jobs:
 
       - name: Build Web
         run: |
-          # 1. 认证配置
+          # 1. 认证
           echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
           
-          # 2. 补齐依赖
+          # 2. 精准补齐 LSP 缺失的底层依赖
           cd packages/dae-lsp
           pnpm add vscode-languageserver vscode-languageserver-textdocument vscode-jsonrpc vscode-languageserver-types vscode-languageserver-protocol -D
           cd ../..
           pnpm install --no-frozen-lockfile
           
-          # 3. 强行加入 inlineOnly: false
-          cat > packages/dae-lsp/tsdown.config.ts <<EOF
-          import { defineConfig } from 'tsdown'
-          export default defineConfig({
-            inlineOnly: false,
-            entry: { 
-              'mod': 'src/mod.ts',
-              'server.bundled': 'src/server-node.ts',
-              'server': 'src/server-node.ts',
-              'server.browser': 'src/browser-server.ts' 
-            },
-            format: ['cjs', 'esm'],
-            dts: true,
-            clean: false,
-            sourcemap: true,
-          })
-          EOF
+          # 3. 【核心修复】精准插入 inlineOnly 配置
+          # 因为是 macOS 环境，sed -i 必须带个备份后缀 ''
+          # 我们在 export default defineConfig 后面直接插入全局配置
+          sed -i '' "s/export default defineConfig(\[/export default defineConfig({ inlineOnly: false, configs: \[/g" packages/dae-lsp/tsdown.config.ts
+          # 在文件末尾补上闭合大括号
+          sed -i '' "s/\])/\]})/g" packages/dae-lsp/tsdown.config.ts
 
-          # 4. 执行编译
-          # 注意：filter 必须匹配 package.json 里的 name
+          # 4. 执行构建 (使用 --filter=daed... 确保顺序)
           pnpm turbo run build --filter=daed...
           
-          # 5. 产物提取
-          mkdir -p dist && cp -r apps/web/dist/* ./dist/
+          # 5. 校验并提取
+          if [ -d "apps/web/dist" ]; then
+            mkdir -p dist && cp -r apps/web/dist/* ./dist/
+          else
+            echo "Build failed, dist folder not found!" && exit 1
+          fi
           
   build-backend:
     needs: [check-versions, build-web]
