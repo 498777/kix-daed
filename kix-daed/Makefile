@@ -27,7 +27,7 @@ prepare:
 		git checkout optimize/code-quality-fixes
 
 build-web:
-	@echo "==> 2. 正在编译前端 (参考官方路径) ..."
+	@echo "==> 2. 正在编译前端..."
 	pnpm install --no-frozen-lockfile
 	TURBO_TELEMETRY_DISABLED=1 pnpm build
 	rm -rf dist
@@ -42,25 +42,40 @@ build-backend:
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	cd wing && CGO_ENABLED=0 go mod tidy
 
-	@echo "==> 5. 源码级路径强力注入..."
+	@echo "==> 5. 源码级硬核注入..."
+	# 5.1 资源路径强制对齐
 	grep -rl "/usr/local/share/dae-wing" wing | xargs -r sed -i 's|/usr/local/share/dae-wing|/usr/share/daed|g'
 	grep -rl "/usr/share/v2ray" wing | xargs -r sed -i 's|/usr/share/v2ray|/usr/share/daed|g'
-	find wing -name "*.go" -exec sed -i 's|Join(.*, "wing.db")|"/etc/daed/wing.db"|g' {} +
-	find wing -name "*.go" -exec sed -i 's|"wing.db"|"/etc/daed/wing.db"|g' {} +
+	
+	# 5.2 数据库与配置目录硬核改写
+	find wing -name "*.go" -exec sed -i 's|configDir, "wing.db"|"/etc/daed/wing.db"|g' {} +
+	find wing -name "*.go" -exec sed -i 's|configDir, "config.geand"|"/etc/daed/config.geand"|g' {} +
+	
+	# 5.3 修正 cmd/run.go 中的默认配置路径
+	find wing/cmd -name "*.go" -exec sed -i 's|/etc/dae-wing|/etc/daed|g' {} +
 
 	@echo "==> 6. 编译 eBPF..."
 	$(MAKE) -C wing/dae-core ebpf CLANG=$(CLANG) STRIP=$(STRIP) TARGET=bpfel,bpfeb
 
-	@echo "==> 7. 调用官方 Bundle 逻辑..."
-	mkdir -p $(BIN_DIR)
-	cd wing && $(MAKE) \
-		OUTPUT=../$(BIN_DIR)/$(NAME)-$(GOARCH) \
-		APPNAME=daed \
-		WEB_DIST=../dist \
-		VERSION=$(FULL_VERSION) \
-		GOOS=$(GOOS) GOARCH=$(GOARCH) \
-		BUILD_ARGS="-tags='kernelext $(shell cat wing/dae-core/.build_tags 2>/dev/null)'" \
-		bundle
+	@echo "==> 7. 准备前端资源..."
+	rm -rf wing/webrender/web
+	mkdir -p wing/webrender/web
 
+	cp -r dist/* wing/webrender/web/
+	
+	# 生成嵌入代码
+	cd wing && unset GOOS && unset GOARCH && go generate -v ./...
+
+	@echo "==> 8. 最终编译..."
+	mkdir -p $(BIN_DIR)
+	$(eval FINAL_LDFLAGS := -s -w -extldflags "-static" \
+		-X github.com/daeuniverse/dae-wing/db.AppVersion=$(FULL_VERSION) \
+		-X github.com/daeuniverse/dae-wing/db.AppName=daed)
+
+	cd wing && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -v -trimpath \
+		-ldflags "$(FINAL_LDFLAGS)" \
+		-tags "kernelext embedallowed $(shell cat wing/dae-core/.build_tags 2>/dev/null)" \
+		-o ../$(BIN_DIR)/$(NAME)-$(GOARCH) .
+	
 	chmod +x $(BIN_DIR)/$(NAME)-$(GOARCH)
 	@echo "==> 编译完成: $(BIN_DIR)/$(NAME)-$(GOARCH)"
