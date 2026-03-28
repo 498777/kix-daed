@@ -9,7 +9,7 @@ export GOEXPERIMENT := newinliner,simd
 
 D_SHA ?= 819e043
 W_SHA ?= 6bb6a31
-C_SHA ?= 6f1d572
+C_SHA ?= 0837cdb
 FULL_VERSION := daed_$(D_SHA)-wing_$(W_SHA)-core_$(C_SHA)
 
 .PHONY: all prepare build-web build-backend
