@@ -2,7 +2,7 @@ name: 1 - Sync Upstream & Deep Cleanup
 
 on:
   schedule:
-    - cron: "0 * * * *" # 每小时执行一次
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -28,9 +28,12 @@ jobs:
           UPSTREAM_WING_SHORT=$(echo "$WING_JSON" | jq -r '.sha' | cut -b 1-7)
           UPSTREAM_CORE_SHORT=$(echo "$CORE_JSON" | jq -r '.sha' | cut -b 1-7)
 
-          # 读取本地 Makefile 中的当前版本
-          CURRENT_DAED=$(grep "PKG_SOURCE_VERSION:=" daed/Makefile | cut -d= -f2 || true)
+          # --- 路径修正：检查 kix-daed/Makefile ---
+          # 使用 find 忽略大小写查找，防止 makefile/Makefile 混淆
+          TARGET_MK=$(find kix-daed -iname "makefile" | head -n 1)
+          CURRENT_DAED=$(grep "PKG_SOURCE_VERSION:=" "$TARGET_MK" | cut -d= -f2 || true)
 
+          echo "Target Makefile: $TARGET_MK"
           echo "Upstream: $UPSTREAM_DAED_FULL | Local: $CURRENT_DAED"
 
           if [ "$UPSTREAM_DAED_FULL" != "$CURRENT_DAED" ]; then
@@ -39,8 +42,8 @@ jobs:
             echo "daed_short=$UPSTREAM_DAED_SHORT" >> $GITHUB_OUTPUT
             echo "wing_short=$UPSTREAM_WING_SHORT" >> $GITHUB_OUTPUT
             echo "core_short=$UPSTREAM_CORE_SHORT" >> $GITHUB_OUTPUT
+            echo "target_mk=$TARGET_MK" >> $GITHUB_OUTPUT
             
-            # 生成日期版本号
             LATEST_DATE=$(echo -e "$(echo "$DAED_JSON" | jq -r '.commit.committer.date')\n$(echo "$WING_JSON" | jq -r '.commit.committer.date')\n$(echo "$CORE_JSON" | jq -r '.commit.committer.date')" | sort -r | head -n 1)
             echo "pkg_ver=$(date -d "$LATEST_DATE" +%Y.%m.%d)" >> $GITHUB_OUTPUT
           else
@@ -50,14 +53,18 @@ jobs:
       - name: Update Makefile & Push
         if: steps.check.outputs.update_needed == 'true'
         run: |
-          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${{ steps.check.outputs.pkg_ver }}/" ./daed/Makefile
-          sed -i "s/DAED_VERSION:=.*/DAED_VERSION:=daed-${{ steps.check.outputs.daed_short }}/" ./daed/Makefile
-          sed -i "s/WING_VERSION:=.*/WING_VERSION:=wing-${{ steps.check.outputs.wing_short }}/" ./daed/Makefile
-          sed -i "s/CORE_VERSION:=.*/CORE_VERSION:=core-${{ steps.check.outputs.core_short }}/" ./daed/Makefile
-          sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${{ steps.check.outputs.daed_full }}/" ./daed/Makefile
+          MK="${{ steps.check.outputs.target_mk }}"
           
-          find . -type f -name "*.init" -exec dos2unix {} \;
-          chmod 755 ./daed/files/daed.init
+          # 批量替换
+          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${{ steps.check.outputs.pkg_ver }}/" "$MK"
+          sed -i "s/DAED_VERSION:=.*/DAED_VERSION:=daed-${{ steps.check.outputs.daed_short }}/" "$MK"
+          sed -i "s/WING_VERSION:=.*/WING_VERSION:=wing-${{ steps.check.outputs.wing_short }}/" "$MK"
+          sed -i "s/CORE_VERSION:=.*/CORE_VERSION:=core-${{ steps.check.outputs.core_short }}/" "$MK"
+          sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${{ steps.check.outputs.daed_full }}/" "$MK"
+          
+          # 处理 init 脚本和换行符（自动搜索 kix-daed 目录下所有 .init）
+          find kix-daed -type f -name "*.init" -exec dos2unix {} \;
+          find kix-daed -type f -name "*.init" -exec chmod 755 {} \;
 
           git config --global user.email "bot@github.com"
           git config --global user.name "VersionBot"
@@ -65,6 +72,7 @@ jobs:
           git commit -m "chore: bump daed to ${{ steps.check.outputs.pkg_ver }} (${{ steps.check.outputs.daed_short }})"
           git push origin main
 
+      # --- 清理逻辑保持不变 ---
       - name: Delete Older Releases
         uses: dev-drprasad/delete-older-releases@master
         with:
@@ -81,11 +89,4 @@ jobs:
           repository: ${{ github.repository }}
           retain_days: 1
           keep_minimum_runs: 3
-        continue-on-error: true
-
-      - name: Remove Old Artifacts
-        uses: c-hive/gha-remove-artifacts@master
-        with:
-          age: '1 days'
-          skip-recent: 3
         continue-on-error: true
