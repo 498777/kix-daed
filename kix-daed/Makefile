@@ -13,13 +13,6 @@ W_SHA ?= "unknown"
 C_SHA ?= "unknown"
 FULL_VERSION := daed_$(D_SHA)-wing_$(W_SHA)-core_$(C_SHA)
 
-# 编译参数
-LDFLAGS := -s -w -extldflags "-static" \
-	-X github.com/daeuniverse/daed/internal/version.Version=$(FULL_VERSION) \
-	-X github.com/daeuniverse/dae-wing/common/consts.DefaultAssetDir=/usr/share/daed
-
-GOBUILD := CGO_ENABLED=0 go build -v -trimpath -ldflags "$(LDFLAGS)"
-
 .PHONY: all prepare build-web build-backend
 
 all: prepare build-web build-backend
@@ -48,20 +41,21 @@ build-backend:
 	cd wing && go mod edit -replace github.com/daeuniverse/outbound=../outbound
 	cd wing && CGO_ENABLED=0 go mod tidy
 
-	@echo "==> 5. 源码级路径强力注入 (对齐 R5C 环境) ..."
+	@echo "==> 5. 源码级路径强力注入..."
 	grep -rl "/usr/local/share/dae-wing" wing | xargs -r sed -i 's|/usr/local/share/dae-wing|/usr/share/daed|g'
 	grep -rl "/usr/share/v2ray" wing | xargs -r sed -i 's|/usr/share/v2ray|/usr/share/daed|g'
 	find wing -name "*.go" -exec sed -i 's|Join(.*, "wing.db")|"/etc/daed/wing.db"|g' {} +
+	find wing -name "*.go" -exec sed -i 's|"wing.db"|"/etc/daed/wing.db"|g' {} +
 
-	@echo "==> 6. 编译 eBPF (olicesx 分支) ..."
+	@echo "==> 6. 编译 eBPF..."
 	$(MAKE) -C wing/dae-core ebpf CLANG=$(CLANG) STRIP=$(STRIP) TARGET=bpfel,bpfeb
 
-	@echo "==> 7. 准备前端资源嵌入 (Bundle 模拟) ..."
+	@echo "==> 7. 准备前端资源嵌入..."
 	rm -rf wing/webrender/web
-	cp -r web/dist wing/webrender/web
+	mkdir -p wing/webrender/web
+	cp -r dist/* wing/webrender/web/
 	
-	# 执行 generate 生成嵌入代码（必须在 unset 环境下）
-	cd wing && unset GOOS && unset GOARCH && go generate ./...
+	cd wing && unset GOOS && unset GOARCH && go generate -v ./...
 
 	@echo "==> 8. 最终编译..."
 	mkdir -p $(BIN_DIR)
@@ -75,3 +69,4 @@ build-backend:
 		-o ../$(BIN_DIR)/$(NAME)-$(GOARCH) .
 	
 	chmod +x $(BIN_DIR)/$(NAME)-$(GOARCH)
+	@echo "==> 编译完成: $(BIN_DIR)/$(NAME)-$(GOARCH)"
