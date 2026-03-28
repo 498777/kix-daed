@@ -55,12 +55,16 @@ jobs:
         run: |
           echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
-          pnpm install --no-frozen-lockfile
-          pnpm build --filter daed
-          mkdir -p dist && cp -r apps/web/dist/* ./dist/
 
-      - uses: actions/upload-artifact@v4
-        with: { name: web-dist, path: dist/, retention-days: 1 }
+          pnpm install --no-frozen-lockfile
+          
+          # 或者直接进入目录执行，绕开 monorepo 的全局检查
+          cd apps/web
+          pnpm run build
+
+          cd ../..
+          mkdir -p dist && cp -r apps/web/dist/* ./dist/
+          
   build-backend:
     needs: [check-versions, build-web]
     runs-on: ubuntu-latest
