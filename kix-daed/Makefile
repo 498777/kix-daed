@@ -49,21 +49,26 @@ build-backend:
 	cd wing && CGO_ENABLED=0 go mod tidy
 
 	@echo "==> 5. 源码级路径强力注入..."
-	find wing -name "*.go" -type f -exec sed -i 's|/usr/local/share/dae-wing|/usr/share/daed|g' {} +
-	find wing -name "*.go" -type f -exec sed -i 's|/usr/share/v2ray|/usr/share/daed|g' {} +
-	find wing -name "*.go" -type f -exec sed -i 's|filepath.Join(configDir, "wing.db")|"/etc/daed/wing.db"|g' {} +
-	find wing -name "*.go" -type f -exec sed -i 's|path.Join(configDir, "wing.db")|"/etc/daed/wing.db"|g' {} +
-	find wing -name "*.go" -type f -exec sed -i 's|"wing.db"|"/etc/daed/wing.db"|g' {} +
+	grep -rl "/usr/local/share/dae-wing" wing | xargs -r sed -i 's|/usr/local/share/dae-wing|/usr/share/daed|g'
+	grep -rl "/usr/share/v2ray" wing | xargs -r sed -i 's|/usr/share/v2ray|/usr/share/daed|g'
+	find wing -name "*.go" -exec sed -i 's|Join(.*, "wing.db")|"/etc/daed/wing.db"|g' {} +
+	find wing -name "*.go" -exec sed -i 's|"wing.db"|"/etc/daed/wing.db"|g' {} +
 
 	@echo "==> 6. 编译 eBPF..."
 	$(MAKE) -C wing/dae-core ebpf CLANG=$(CLANG) STRIP=$(STRIP) TARGET=bpfel,bpfeb
 
-	@echo "==> 7. 生成辅助代码..."
-	cd wing && GOOS= GOARCH= go generate -v ./...
+	@echo "==> 7. 生成 wing 辅助代码..."
+	cd wing && unset GOOS && unset GOARCH && go generate ./...
 
 	@echo "==> 8. 最终编译..."
 	mkdir -p $(BIN_DIR)
+	$(eval FINAL_LDFLAGS := -s -w -extldflags "-static" \
+		-X github.com/daeuniverse/dae-wing/db.AppVersion=$(FULL_VERSION) \
+		-X github.com/daeuniverse/dae-wing/db.AppName=daed)
+
 	cd wing && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -v -trimpath \
-		-ldflags "-s -w -extldflags '-static' -X github.com/daeuniverse/daed/internal/version.Version=$(FULL_VERSION)" \
+		-ldflags "$(FINAL_LDFLAGS)" \
 		-tags "kernelext $(shell cat wing/dae-core/.build_tags 2>/dev/null)" \
 		-o ../$(BIN_DIR)/$(NAME)-$(GOARCH) .
+	
+	chmod +x $(BIN_DIR)/$(NAME)-$(GOARCH)
