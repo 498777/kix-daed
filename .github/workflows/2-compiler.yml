@@ -25,6 +25,7 @@ jobs:
           D=$(grep "^D_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
           W=$(grep "^W_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
           C=$(grep "^C_SHA" kix-daed/Makefile | cut -d= -f2 | tr -d ' "?')
+          
           echo "daed_full=$D" >> $GITHUB_OUTPUT
           echo "daed=${D:0:7}" >> $GITHUB_OUTPUT
           echo "wing=${W:0:7}" >> $GITHUB_OUTPUT
@@ -38,19 +39,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: daeuniverse/daed
-          ref: ${{ needs.check-versions.outputs.daed_full }}
+          ref: ${{ needs.check-versions.outputs.daed_full }} # 必须用完整 SHA
+
       - uses: actions/setup-node@v4
         with:
           node-version: 'latest'
           cache: 'pnpm'
       - uses: pnpm/action-setup@v4
         with: { version: 10.24.0 }
-      - run: |
+
+      - name: Build Web
+        run: |
           echo "@daeuniverse:registry=https://npm.pkg.github.com" >> .npmrc
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
           pnpm install --no-frozen-lockfile
           pnpm build --filter daed
           mkdir -p dist && cp -r apps/web/dist/* ./dist/
+
       - uses: actions/upload-artifact@v4
         with: { name: web-dist, path: dist/, retention-days: 1 }
 
@@ -67,15 +72,21 @@ jobs:
             goamd64: v1
             asset_name: arm64
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Official daed
+        uses: actions/checkout@v4
         with:
           repository: daeuniverse/daed
-          ref: ${{ needs.check-versions.outputs.daed_full }}
+          ref: ${{ needs.check-versions.outputs.daed_full }} 
           submodules: recursive
-      - uses: actions/checkout@v4
+
+      - name: Checkout My Custom Config
+        uses: actions/checkout@v4
         with: { path: my-config }
-      - uses: actions/download-artifact@v4
+
+      - name: Download Web Dist
+        uses: actions/download-artifact@v4
         with: { name: web-dist, path: dist }
+
       - name: Execute Build
         env:
           GOOS: linux
@@ -87,7 +98,9 @@ jobs:
           cp my-config/kix-daed/Makefile ./Makefile
           sudo apt-get update && sudo apt-get install -y clang-15 llvm-15 libelf-dev libcap-dev
           make build-backend
-      - uses: softprops/action-gh-release@v2
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check-versions.outputs.tag_name }}
           files: bin/daed-${{ matrix.asset_name }}
@@ -98,5 +111,6 @@ jobs:
             - **core**: `olicesx/dae@${{ needs.check-versions.outputs.core }}`
             
             > ℹ️ **Default assets path**: `/usr/share/daed/`, **DB path**: `/etc/daed/wing.db`
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
